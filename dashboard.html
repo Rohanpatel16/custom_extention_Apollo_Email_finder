@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apollo Verifier CRM</title>
+    <link rel="stylesheet" href="dashboard.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="brand">
+                <span class="brand-icon">🚀</span>
+                <h1>Apollo CRM</h1>
+            </div>
+
+            <nav class="nav-menu">
+                <button class="nav-item active" data-tab="all">
+                    <span class="icon">👥</span> All Leads <span class="badge" id="count-all">0</span>
+                </button>
+                <button class="nav-item" data-tab="verified">
+                    <span class="icon">✅</span> Verified <span class="badge" id="count-verified">0</span>
+                </button>
+                <button class="nav-item" data-tab="failed">
+                    <span class="icon">❌</span> Failed <span class="badge" id="count-failed">0</span>
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div id="balance-display"
+                    style="padding: 10px 20px; font-weight: 600; color: #2ecc71; border-top: 1px solid rgba(255,255,255,0.1); margin-top: 10px;">
+                    Credits: $...</div>
+                <button class="nav-item" id="toggle-dark-mode">
+                    <span class="icon">🌙</span> Dark Mode
+                </button>
+                <button class="nav-item" id="settings-btn">
+                    <span class="icon">⚙️</span> Settings
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="top-bar">
+                <div class="search-container">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="global-search" placeholder="Search by name, company, or job title...">
+                </div>
+                <div class="actions-container">
+                    <button id="refresh-btn" class="btn btn-secondary">🔄 Refresh</button>
+                    <button id="import-btn" class="btn btn-secondary">📥 Import CSV</button>
+                    <input type="file" id="import-input" accept=".csv" style="display:none;">
+                    <button id="export-btn" class="btn btn-primary">💾 Export Data</button>
+                    <button id="clear-all-btn" class="btn btn-danger">🗑️ Clear All</button>
+                </div>
+            </header>
+
+            <!-- Filters -->
+            <section class="filters-bar">
+                <div class="filter-group">
+                    <select id="filter-job" class="filter-select">
+                        <option value="">All Job Titles</option>
+                    </select>
+                    <select id="filter-company" class="filter-select">
+                        <option value="">All Companies</option>
+                    </select>
+                    <select id="filter-location" class="filter-select">
+                        <option value="">All Locations</option>
+                    </select>
+                </div>
+                <div class="view-options">
+                    <label><input type="checkbox" id="show-valid-only"> Valid Emails Only</label>
+                </div>
+            </section>
+
+            <!-- Data Table -->
+            <div class="table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th width="40"><input type="checkbox" id="select-all-rows"></th>
+                            <th width="200">Name / Job</th>
+                            <th width="200">Company</th>
+                            <th width="150">Location</th>
+                            <th width="250">Email / Status</th>
+                            <th width="100">Socials</th>
+                            <th width="80">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-body">
+                        <!-- Rows injected by JS -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Pagination -->
+            <div class="pagination">
+                <span id="pagination-info">Showing 0-0 of 0</span>
+                <div class="pagination-controls">
+                    <button id="prev-page" disabled>Previous</button>
+                    <button id="next-page" disabled>Next</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Export Modal -->
+    <div id="export-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>Export Options</h3>
+            <div class="modal-body">
+                <label><input type="radio" name="export-format" value="csv" checked> CSV</label>
+                <label><input type="radio" name="export-format" value="json"> JSON</label>
+                <hr>
+                <label><input type="checkbox" id="export-valid-only" checked> Valid Emails Only</label>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="close-export-modal">Cancel</button>
+                <button class="btn btn-primary" id="confirm-export">Download</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal hidden">
+        <div class="modal-content" style="max-width: 600px;">
+            <h3>⚙️ API Key Management</h3>
+            <div class="modal-body">
+                <div class="av-input-group">
+                    <label style="display:block; margin-bottom:5px; font-weight:500;">Add New Key</label>
+                    <div style="display:flex; gap:10px;">
+                        <input type="text" id="new-key-token" placeholder="Apify API Token" class="av-input" style="flex:2;">
+                        <input type="text" id="new-key-label" placeholder="Label (e.g. Account 1)" class="av-input" style="flex:1;">
+                        <input type="date" id="new-key-date" title="Renew Date" class="av-input" style="width:130px;">
+                    </div>
+                    <button id="add-key-btn" class="btn btn-primary" style="margin-top:10px; width:100%;">+ Add Key</button>
+                </div>
+
+                <hr style="margin: 20px 0; border:0; border-top:1px solid #eee;">
+
+                <label style="display:block; margin-bottom:10px; font-weight:500;">Your Keys</label>
+                <div id="keys-list" class="keys-list-container">
+                    <!-- Keys injected here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="close-settings-modal">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="storage.js"></script>
+    <script src="dashboard.js"></script>
+</body>
+
+</html>

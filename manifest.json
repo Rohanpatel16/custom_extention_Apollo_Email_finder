@@ -1,0 +1,38 @@
+{
+    "manifest_version": 3,
+    "name": "Apollo Email Verifier",
+    "version": "2.1",
+    "description": "Extracts names and websites from Apollo search results, generates email permutations, and verifies them using Apify Million Verifier.",
+    "permissions": [
+        "activeTab",
+        "scripting",
+        "storage",
+        "unlimitedStorage"
+    ],
+    "host_permissions": [
+        "https://api.apify.com/*"
+    ],
+    "action": {},
+    "background": {
+        "service_worker": "background.js"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "https://app.apollo.io/*"
+            ],
+            "js": [
+                "storage.js",
+                "content.js"
+            ],
+            "css": [
+                "sidebar.css"
+            ]
+        }
+    ],
+    "icons": {
+        "16": "icons/icon16.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+    }
+}
