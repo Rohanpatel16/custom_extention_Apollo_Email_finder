@@ -1,7 +1,11 @@
 
 chrome.action.onClicked.addListener((tab) => {
     if (tab.id) {
-        chrome.tabs.sendMessage(tab.id, { action: "toggle_sidebar" });
+        if (tab.url && tab.url.includes("app.apollo.io")) {
+            chrome.tabs.sendMessage(tab.id, { action: "toggle_sidebar" });
+        } else {
+            chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
+        }
     }
 });
 

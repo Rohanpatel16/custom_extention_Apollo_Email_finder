@@ -540,11 +540,13 @@
             // ── BATCH MODE ──────────────────────────────────────────────────
             // Collect 5 pages silently, then verify once, then advance filter.
             while (state.autoScraping) {
+                let newProfilesInBatch = 0;
                 while (state.autoScraping) {
                     const currentPage = getCurrentPageFromUrl();
                     setAutoScrapeStatus(`[Batch] Collecting page ${currentPage}/5… (Min: ${getCurrentMinFromUrl()})`);
                     await wait(2500);
-                    await extractProfiles(true);
+                    const newlyExtracted = await extractProfiles(true);
+                    newProfilesInBatch += newlyExtracted || 0;
                     if (currentPage >= 5) break;
                     setAutoScrapeStatus(`[Batch] Page ${currentPage} done — going to next…`);
                     if (!(await clickNext())) break;
@@ -560,6 +562,14 @@
                 if (!success) {
                     showToast('🤖 Auto-Scrape: API Error — stopping safety stop.', 'error');
                     setAutoScrapeStatus('Stopped: API Error ❌');
+                    state.autoScraping = false;
+                    document.getElementById('av-autoscrape-toggle').checked = false;
+                    break;
+                }
+                
+                if (newProfilesInBatch === 0) {
+                    showToast('🤖 Auto-Scrape complete — NO new profiles found. Results are still there so please change filter and make the profiles a little smaller.', 'warning');
+                    setAutoScrapeStatus('Complete ✅ — No new profiles. Reduce filter.');
                     state.autoScraping = false;
                     document.getElementById('av-autoscrape-toggle').checked = false;
                     break;
@@ -584,11 +594,13 @@
             // ── PER-PAGE MODE ───────────────────────────────────────────────
             // Verify after EACH page, then go to next. After page 5, advance filter.
             while (state.autoScraping) {
+                let newProfilesInBatch = 0;
                 while (state.autoScraping) {
                     const currentPage = getCurrentPageFromUrl();
                     setAutoScrapeStatus(`[Per-Page] Page ${currentPage}/5… (Min: ${getCurrentMinFromUrl()})`);
                     await wait(2500);
-                    await extractProfiles(true);
+                    const newlyExtracted = await extractProfiles(true);
+                    newProfilesInBatch += newlyExtracted || 0;
 
                     // Verify this page's profiles immediately
                     setAutoScrapeStatus(`[Per-Page] Page ${currentPage} — verifying…`);
@@ -611,6 +623,14 @@
 
                 const maxCount = getHighestEmployeeCount();
                 const currentMin = getCurrentMinFromUrl();
+
+                if (newProfilesInBatch === 0) {
+                    showToast('🤖 Auto-Scrape complete — NO new profiles found. Results are still there so please change filter and make the profiles a little smaller.', 'warning');
+                    setAutoScrapeStatus('Complete ✅ — No new profiles. Reduce filter.');
+                    state.autoScraping = false;
+                    document.getElementById('av-autoscrape-toggle').checked = false;
+                    break;
+                }
 
                 if (maxCount !== null && maxCount > currentMin) {
                     setAutoScrapeStatus(`[Per-Page] Advancing filter: ${currentMin} → ${maxCount}…`);
@@ -758,6 +778,8 @@
         } else {
             showToast("No new profiles found on this page.", "neutral");
         }
+        
+        return newCount;
     }
 
     /**
@@ -899,7 +921,7 @@
         const toVerify = state.profiles.filter(p => p.selected && (isRetry ? p.status === 'failed' : p.status !== 'verified'));
         if (toVerify.length === 0) {
             showToast("No profiles selected for verification", "neutral");
-            return;
+            return true;
         }
 
         // UI Loading State
