@@ -119,12 +119,9 @@ const Storage = {
         return new Promise((resolve) => {
             chrome.storage.local.remove(this.KEYS.PROFILES, () => {
                 resolve();
-                // 🔵 Turso cloud sync: delete everything
-                if (typeof TursoSync !== 'undefined') {
-                    TursoSync.deleteAllProfiles().catch(err =>
-                        console.warn('[TursoSync] deleteAll failed:', err)
-                    );
-                }
+                // 🔵 Turso cloud sync: WE NO LONGER DELETE FROM CLOUD
+                // User wants to keep cloud data as a permanent record.
+                console.log('[Storage] Local profiles cleared. Cloud data preserved.');
             });
         });
     },

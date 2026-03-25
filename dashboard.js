@@ -223,7 +223,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         document.getElementById('clear-all-btn').addEventListener('click', async () => {
-            if (confirm("Are you sure you want to delete ALL data?")) {
+            if (confirm("Clear local leads? (Don't worry, your cloud backup in Turso will be preserved)")) {
                 await StorageWrapper.clearAllProfiles();
                 allProfiles = [];
                 applyFilters();
