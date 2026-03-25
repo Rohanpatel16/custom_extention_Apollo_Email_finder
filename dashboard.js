@@ -13,6 +13,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let filterJob = '';
     let filterCompany = '';
     let filterLocation = '';
+    let filterIndustry = '';
+    let filterEmployees = '';  // preset band string OR 'custom'
+    let customEmpMin = null;   // used when filterEmployees === 'custom'
+    let customEmpMax = null;
     let showValidOnly = false;
 
     // --- initialization ---
@@ -20,11 +24,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function init() {
         await loadData();
-        updateBalance(); // New
-        initSettings(); // New
+        updateBalance();
+        initSettings();
         setupEventListeners();
         render();
         updateFilterOptions();
+
+        // ── Auto-refresh: listen for storage changes from extension ──────────
+        // When content.js saves verified profiles to chrome.storage.local,
+        // the dashboard updates automatically — no button click needed.
+        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
+            chrome.storage.onChanged.addListener((changes, area) => {
+                if (area === 'local' && changes['av_profiles']) {
+                    // New profiles written by the extension — reload silently
+                    const newVal = changes['av_profiles'].newValue || [];
+                    allProfiles = newVal;
+                    applyFilters();
+                    render();
+                    updateFilterOptions();
+                    updateCounts();
+                    console.log('[Dashboard] Auto-refreshed from storage change');
+                }
+            });
+        }
     }
 
     async function updateBalance() {
@@ -56,6 +78,28 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
+        // Legal page
+        document.getElementById('legal-nav-btn').addEventListener('click', () => {
+            document.getElementById('legal-section').style.display = 'block';
+        });
+        document.getElementById('legal-close-btn').addEventListener('click', () => {
+            document.getElementById('legal-section').style.display = 'none';
+        });
+        document.querySelectorAll('.legal-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                // Switch active tab style
+                document.querySelectorAll('.legal-tab').forEach(t => {
+                    t.style.color = '#6b7280';
+                    t.style.borderBottom = 'none';
+                });
+                tab.style.color = '#4f46e5';
+                tab.style.borderBottom = '2px solid #4f46e5';
+                // Show the right content
+                document.querySelectorAll('.legal-content').forEach(c => c.style.display = 'none');
+                document.getElementById('legal-' + tab.dataset.legal).style.display = 'block';
+            });
+        });
+
         // Search
         document.getElementById('global-search').addEventListener('input', (e) => {
             searchQuery = e.target.value.toLowerCase();
@@ -83,6 +127,52 @@ document.addEventListener('DOMContentLoaded', () => {
             applyFilters();
             render();
         });
+        document.getElementById('filter-industry').addEventListener('change', (e) => {
+            filterIndustry = e.target.value;
+            currentPage = 1;
+            applyFilters();
+            render();
+        });
+        document.getElementById('filter-employees').addEventListener('change', (e) => {
+            filterEmployees = e.target.value;
+            const customRow = document.getElementById('custom-emp-range');
+            if (filterEmployees === 'custom') {
+                customRow.style.display = 'flex';
+                // Don't apply yet — wait for the Apply button
+            } else {
+                customRow.style.display = 'none';
+                customEmpMin = null;
+                customEmpMax = null;
+                currentPage = 1;
+                applyFilters();
+                render();
+            }
+        });
+
+        // Custom range: Apply button
+        document.getElementById('emp-apply-btn').addEventListener('click', () => {
+            const minVal = document.getElementById('emp-min').value;
+            const maxVal = document.getElementById('emp-max').value;
+            customEmpMin = minVal !== '' ? parseInt(minVal, 10) : null;
+            customEmpMax = maxVal !== '' ? parseInt(maxVal, 10) : null;
+            currentPage = 1;
+            applyFilters();
+            render();
+        });
+
+        // Custom range: Clear / reset button
+        document.getElementById('emp-clear-btn').addEventListener('click', () => {
+            document.getElementById('emp-min').value = '';
+            document.getElementById('emp-max').value = '';
+            document.getElementById('filter-employees').value = '';
+            document.getElementById('custom-emp-range').style.display = 'none';
+            filterEmployees = '';
+            customEmpMin = null;
+            customEmpMax = null;
+            currentPage = 1;
+            applyFilters();
+            render();
+        });
         document.getElementById('show-valid-only').addEventListener('change', (e) => {
             showValidOnly = e.target.checked;
             currentPage = 1;
@@ -97,6 +187,39 @@ document.addEventListener('DOMContentLoaded', () => {
                 render();
                 alert('Data refreshed from storage');
             });
+        });
+
+        document.getElementById('sync-cloud-btn').addEventListener('click', async () => {
+            const btn = document.getElementById('sync-cloud-btn');
+            btn.textContent = '⏳ Syncing…';
+            btn.disabled = true;
+            try {
+                // Check what's in Turso first
+                const cloudProfiles = await TursoSync.getAllProfiles();
+
+                if (cloudProfiles.length === 0 && allProfiles.length > 0) {
+                    // Turso is empty but we have local data → PUSH local up to cloud
+                    const count = await StorageWrapper.pushToTurso();
+                    alert(`✅ Backed up ${count} profiles to Turso cloud.`);
+                } else if (cloudProfiles.length > 0) {
+                    // Turso has data → PULL cloud into local storage
+                    const profiles = await StorageWrapper.pullFromTurso();
+                    allProfiles = profiles;
+                    applyFilters();
+                    render();
+                    updateFilterOptions();
+                    alert(`✅ Synced ${profiles.length} profiles from Turso cloud.`);
+                } else {
+                    // Both empty
+                    alert('ℹ️ Nothing to sync — no profiles in local storage or cloud yet.');
+                }
+            } catch (err) {
+                console.error('[TursoSync] sync failed:', err);
+                alert('❌ Sync failed: ' + err.message);
+            } finally {
+                btn.textContent = '☁️ Sync from Cloud';
+                btn.disabled = false;
+            }
         });
 
         document.getElementById('clear-all-btn').addEventListener('click', async () => {
@@ -154,7 +277,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Search
             if (searchQuery) {
-                const searchStr = `${p.name} ${p.company} ${p.title} ${p.location}`.toLowerCase();
+                const searchStr = `${p.name} ${p.company} ${p.title} ${p.location} ${p.employees || ''} ${p.industry || ''}`.toLowerCase();
                 if (!searchStr.includes(searchQuery)) return false;
             }
 
@@ -162,6 +285,28 @@ document.addEventListener('DOMContentLoaded', () => {
             if (filterJob && p.title !== filterJob) return false;
             if (filterCompany && p.company !== filterCompany) return false;
             if (filterLocation && p.location !== filterLocation) return false;
+            if (filterIndustry && (p.industry || '').toLowerCase() !== filterIndustry.toLowerCase()) return false;
+
+            // Employee range filter
+            if (filterEmployees) {
+                const empNum = parseInt(String(p.employees || '').replace(/,/g, '').replace(/\+/g, '').trim(), 10);
+                if (!isNaN(empNum)) {
+                    if (filterEmployees === 'custom') {
+                        if (customEmpMin !== null && empNum < customEmpMin) return false;
+                        if (customEmpMax !== null && empNum > customEmpMax) return false;
+                    } else if (filterEmployees === '10001+') {
+                        if (empNum <= 10000) return false;
+                    } else {
+                        const [minStr, maxStr] = filterEmployees.split('-');
+                        const min = parseInt(minStr, 10);
+                        const max = parseInt(maxStr, 10);
+                        if (empNum < min || empNum > max) return false;
+                    }
+                } else if (filterEmployees && filterEmployees !== 'custom') {
+                    // No parseable number and a preset filter is set — exclude
+                    return false;
+                }
+            }
 
             // Show Valid Only checkbox
             if (showValidOnly) {
@@ -186,10 +331,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const jobs = [...new Set(allProfiles.map(p => p.title).filter(Boolean))].sort();
         const companies = [...new Set(allProfiles.map(p => p.company).filter(Boolean))].sort();
         const locations = [...new Set(allProfiles.map(p => p.location).filter(Boolean))].sort();
+        const industries = [...new Set(allProfiles.map(p => p.industry).filter(Boolean))].sort();
 
         populateSelect('filter-job', jobs);
         populateSelect('filter-company', companies);
         populateSelect('filter-location', locations);
+        populateSelect('filter-industry', industries);
+        // Note: filter-employees options are static (fixed bands) — not populated dynamically
     }
 
     function populateSelect(id, options) {
@@ -220,13 +368,11 @@ document.addEventListener('DOMContentLoaded', () => {
             pageItems.forEach(p => {
                 const tr = document.createElement('tr');
 
-                // Email Column Logic - SHOW VALID ONLY
+                // Email Column Logic - current verified emails
                 let emailHtml = '';
-                // Filter for valid emails first
                 const validEmails = p.results ? p.results.filter(r => r.result === 'ok') : [];
 
                 if (validEmails.length > 0) {
-                    // Show only valid emails
                     validEmails.forEach(r => {
                         emailHtml += `<div class="email-row" title="Verified Valid">
                             <span style="font-size:12px; color: #10b981;">✅ ${r.email}</span>
@@ -234,16 +380,26 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>`;
                     });
                 } else if (p.status === 'verified') {
-                    // Status is verified (process completed), but no valid emails found
                     emailHtml = `<span class="status-badge status-failed" title="Verification completed but no valid email found">No Valid Email</span>`;
                 } else if (p.results && p.results.length > 0) {
-                    // Has results but none valid, and status might be 'failed' or 'processed'
-                    // User wants ONLY valid. So show "No Valid Email" or show nothing?
-                    // Showing "No Valid Email" is clearer than empty.
                     emailHtml = `<span class="status-badge status-failed">No Valid Email</span>`;
                 } else {
-                    // No results yet
                     emailHtml = `<span class="status-badge status-${p.status}">${p.status}</span>`;
+                }
+
+                // Old emails from previous jobs
+                const oldVerified = Array.isArray(p.old_results)
+                    ? p.old_results.filter(r => r.result === 'ok')
+                    : [];
+                if (oldVerified.length > 0) {
+                    emailHtml += `<div style="margin-top:4px; border-top:1px dashed #d1d5db; padding-top:3px;">`;
+                    oldVerified.forEach(r => {
+                        emailHtml += `<div class="email-row" title="Past job email (archived)">
+                            <span style="font-size:11px; color:#9ca3af;">📂 ${r.email}</span>
+                            <button class="btn-copy" onclick="copyToClipboard('${r.email}')">📋</button>
+                        </div>`;
+                    });
+                    emailHtml += `</div>`;
                 }
 
                 // Socials
@@ -252,6 +408,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (p.website) socialsHtml += `<a href="${p.website}" target="_blank" title="Company Website">🌐</a>`;
                 if (p.companyLinkedin) socialsHtml += `<a href="${p.companyLinkedin}" target="_blank" title="Company LinkedIn">🏢</a>`;
 
+                // Job-change badge
+                const jobChangeBadge = p.jobChanged
+                    ? `<span title="Job changed — re-verify email" style="font-size:10px; background:#fef3c7; color:#92400e; padding:1px 5px; border-radius:4px; margin-left:4px;">🔄 Job Changed</span>`
+                    : '';
+
                 tr.innerHTML = `
                     <td><input type="checkbox" class="row-checkbox" value="${p.id}"></td>
                     <td>
@@ -259,9 +420,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="cell-title">${p.title || '-'}</div>
                     </td>
                     <td>
-                        <div>${p.company || '-'}</div>
+                        <div>${p.company || '-'}${jobChangeBadge}</div>
                         <div class="cell-meta">${p.domain || ''}</div>
                     </td>
+                    <td><div style="font-size:13px;">${p.employees || '-'}</div></td>
+                    <td><div style="font-size:13px; color:#6b7280;">${p.industry || '-'}</div></td>
                     <td>${p.location || '-'}</td>
                     <td>${emailHtml}</td>
                     <td>${socialsHtml}</td>
@@ -271,6 +434,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 `;
                 tbody.appendChild(tr);
             });
+
         }
 
         // Pagination Info
@@ -305,7 +469,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function downloadCSV(data) {
-        const header = ["Name", "Title", "Company", "Location", "Domain", "Website", "Person_LinkedIn", "Company_LinkedIn", "Email", "Verification_Status"];
+        const header = ["Name", "Title", "Company", "Employees", "Industry", "Location", "Domain", "Website", "Person_LinkedIn", "Company_LinkedIn", "Email", "Verification_Status"];
         let csvContent = header.join(",") + "\n";
 
         data.forEach(p => {
@@ -325,7 +489,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (emails.length === 0) {
                 // Export valid person even if no email?
                 const row = [
-                    `"${p.name}"`, `"${p.title || ''}"`, `"${p.company || ''}"`, `"${p.location || ''}"`,
+                    `"${p.name}"`, `"${p.title || ''}"`, `"${p.company || ''}"`, `"${p.employees || ''}"`, `"${p.industry || ''}"`, `"${p.location || ''}"`,
                     `"${p.domain || ''}"`, `"${p.website || ''}"`, `"${p.linkedin || ''}"`, `"${p.companyLinkedin || ''}"`,
                     `""`, `"${p.status}"`
                 ];
@@ -333,7 +497,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 emails.forEach(e => {
                     const row = [
-                        `"${p.name}"`, `"${p.title || ''}"`, `"${p.company || ''}"`, `"${p.location || ''}"`,
+                        `"${p.name}"`, `"${p.title || ''}"`, `"${p.company || ''}"`, `"${p.employees || ''}"`, `"${p.industry || ''}"`, `"${p.location || ''}"`,
                         `"${p.domain || ''}"`, `"${p.website || ''}"`, `"${p.linkedin || ''}"`, `"${p.companyLinkedin || ''}"`,
                         `"${e.email}"`, `"${e.status}"`
                     ];
@@ -384,6 +548,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         name: name,
                         title: row.Title || "",
                         company: row.Company || "",
+                        employees: row.Employees || "",
+                        industry: row.Industry || "",
                         location: row.Location || "",
                         domain: domain,
                         website: row.Website || "",

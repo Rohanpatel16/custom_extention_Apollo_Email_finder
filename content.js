@@ -391,10 +391,18 @@
 
         const counts = [];
 
-        // Strategy 1: Apollo renders employee count in cells with this data-id
-        document.querySelectorAll('[data-id="account.estimated_num_employees"]').forEach(cell => {
-            const n = parseCount(cell.textContent);
-            if (n && n > 0) counts.push(n);
+        // Strategy 1: Apollo renders employee count in cells with these data-ids
+        const empDataIds = [
+            'account.number_of_employees',
+            'account.estimated_num_employees',
+            'organization_num_employees',
+            'organization_estimated_num_employees'
+        ];
+        empDataIds.forEach(did => {
+            document.querySelectorAll(`[data-id="${did}"]`).forEach(cell => {
+                const n = parseCount(cell.textContent);
+                if (n && n > 0) counts.push(n);
+            });
         });
 
         if (counts.length > 0) {
@@ -662,20 +670,45 @@
             location: 2,
             linkedin: 4,
             company: 6,
-            companySocial: 5
+            companySocial: 5,
+            employees: null,
+            industry: null
         };
 
         const headers = document.querySelectorAll('[role="columnheader"]');
         headers.forEach(h => {
             const id = h.getAttribute('data-id');
             const idx = h.getAttribute('aria-colindex');
-            if (id && idx) {
-                if (id === 'contact.name') mapping.name = idx;
-                if (id === 'contact.job_title') mapping.title = idx;
-                if (id === 'contact.location') mapping.location = idx;
-                if (id === 'contact.social') mapping.linkedin = idx;
-                if (id === 'contact.account') mapping.company = idx;
-                if (id === 'account.social') mapping.companySocial = idx;
+            
+            if (idx) {
+                // 1. Detect by common Apollo data-ids
+                if (id) {
+                    if (id === 'contact.name') mapping.name = idx;
+                    if (id === 'contact.job_title') mapping.title = idx;
+                    if (id === 'contact.location') mapping.location = idx;
+                    if (id === 'contact.social') mapping.linkedin = idx;
+                    if (id === 'contact.account') mapping.company = idx;
+                    if (id === 'account.social') mapping.companySocial = idx;
+                    // Employees variants
+                    if (id === 'account.estimated_num_employees' || 
+                        id === 'account.number_of_employees' || 
+                        id === 'organization_num_employees' ||
+                        id === 'organization_estimated_num_employees') {
+                        mapping.employees = idx;
+                    }
+                    // Industry variants
+                    if (id === 'account.industry' || 
+                        id === 'account.industries' || 
+                        id === 'organization_industry' ||
+                        id === 'organization_industries') {
+                        mapping.industry = idx;
+                    }
+                }
+
+                // 2. Fallback: Detect by header text (inclusive)
+                const text = h.textContent.toLowerCase();
+                if (text.includes('employ')) mapping.employees = idx;
+                if (text.includes('industr')) mapping.industry = idx; // matches 'industry' and 'industries'
             }
         });
         return mapping;
@@ -688,57 +721,116 @@
         let newCount = 0;
         const newProfiles = [];
 
-        // Fetch Global CRM to check for duplicates/existing data
+        // Fetch Global CRM to build smart lookup maps
         let globalProfiles = [];
         if (window.StorageWrapper) {
             globalProfiles = await StorageWrapper.getAllProfiles();
         }
 
-        // Map for fast lookup
-        // Using name + domain (or just id if we had it, but we generate ID)
-        // Ideally we match by a composite key since ID is random.
-        // Let's match by Name + Domain.
-        const globalProfileMap = new Map();
+        // ── Build lookup maps ──────────────────────────────────────────────────
+        // Priority 1: LinkedIn URL (never changes across jobs)
+        const linkedinMap = new Map();
+        // Priority 2: Exact name (case-insensitive)
+        const nameMap = new Map();
+        // Legacy: name + domain (exact match, no job change)
+        const nameDomainMap = new Map();
+
         globalProfiles.forEach(p => {
-            const key = (p.name + "|" + p.domain).toLowerCase();
-            globalProfileMap.set(key, p);
+            if (p.linkedin) linkedinMap.set(p.linkedin.trim().toLowerCase(), p);
+            const nameKey = (p.name || '').trim().toLowerCase();
+            if (nameKey && !nameMap.has(nameKey)) nameMap.set(nameKey, p); // first occurrence wins
+            const ndKey = (p.name + '|' + p.domain).toLowerCase();
+            nameDomainMap.set(ndKey, p);
         });
 
         rows.forEach((row) => {
             // Skip header rows
             if (row.querySelector('[role="columnheader"]')) return;
 
-            // Pass global map to check emptiness or pre-fill? 
-            // Better to parse first, then check.
             const profile = parseProfileRow(row, colMap);
+            if (!profile) return;
 
-            if (profile) {
-                // Check if already in CURRENT SESSION (Sidebar)
-                const inSession = state.profiles.some(p => p.name === profile.name && p.domain === profile.domain);
+            // ── Check already in CURRENT SESSION (Sidebar) ────────────────────
+            const inSession = state.profiles.some(p =>
+                (p.linkedin && p.linkedin === profile.linkedin) ||
+                (p.name === profile.name && p.domain === profile.domain)
+            );
+            if (inSession) return;
 
-                if (!inSession) {
-                    // Check if in GLOBAL CRM
-                    const key = (profile.name + "|" + profile.domain).toLowerCase();
-                    if (globalProfileMap.has(key)) {
-                        const existing = globalProfileMap.get(key);
-                        // Reuse ID and Status and Results
-                        profile.id = existing.id;
-                        profile.status = existing.status;
-                        profile.results = existing.results || [];
-                        // We might want to keep the NEW scraped data (title, location) if it updated?
-                        // For now, let's mix: New Scraped Data + Old Status/Results/ID
-                        // But wait, if we overwrite ID we might break things if not careful.
-                        // Actually, if we found it in CRM, let's use the CRM version directly?
-                        // But maybe the user wants to see the current page's version.
-                        // Let's use the CRM version but update it with current page info if needed.
-                        // Simple: Use CRM ID, Status, Results.
-                    }
+            // ── Smart CRM lookup ───────────────────────────────────────────────
+            let existing = null;
+            let matchedBy = null;
 
-                    newProfiles.push(profile);
-                    newCount++;
+            // 1. LinkedIn URL match (most reliable)
+            if (profile.linkedin) {
+                const li = profile.linkedin.trim().toLowerCase();
+                if (linkedinMap.has(li)) {
+                    existing = linkedinMap.get(li);
+                    matchedBy = 'linkedin';
                 }
             }
+
+            // 2. Name-only match (catches job changes)
+            if (!existing) {
+                const nameKey = (profile.name || '').trim().toLowerCase();
+                if (nameKey && nameMap.has(nameKey)) {
+                    existing = nameMap.get(nameKey);
+                    matchedBy = 'name';
+                }
+            }
+
+            if (existing) {
+                // ── UPDATE IN-PLACE ────────────────────────────────────────────
+                const domainChanged = existing.domain && profile.domain &&
+                    existing.domain.toLowerCase() !== profile.domain.toLowerCase();
+
+                // Archive old verified emails if domain changed (job change)
+                let old_results = Array.isArray(existing.old_results) ? [...existing.old_results] : [];
+                if (domainChanged && existing.results && existing.results.length > 0) {
+                    const oldVerified = existing.results.filter(r => r.result === 'ok');
+                    if (oldVerified.length > 0) {
+                        // Avoid duplicating already-archived results
+                        const archivedEmails = new Set(old_results.map(r => r.email));
+                        oldVerified.forEach(r => {
+                            if (!archivedEmails.has(r.email)) {
+                                old_results.push({ ...r, archivedAt: new Date().toISOString() });
+                            }
+                        });
+                    }
+                }
+
+                // Merge: keep current verified results only for the CURRENT domain
+                // If domain changed, reset results (will re-verify under new domain)
+                const currentResults = domainChanged ? [] : (existing.results || []);
+
+                // Build updated profile — refresh all mutable fields, keep identity fields
+                const updated = {
+                    ...profile,                          // new scraped fields (title, company, domain, etc.)
+                    id: existing.id,                     // keep stable ID
+                    status: domainChanged ? 'ready' : existing.status,
+                    results: currentResults,
+                    old_results: old_results,
+                    jobChanged: domainChanged,
+                    emails: profile.emails               // regenerated from new domain in parseProfileRow
+                };
+
+                if (domainChanged) {
+                    console.log(`[SmartDedup] Job change detected for "${profile.name}": ${existing.domain} → ${profile.domain}`);
+                } else {
+                    console.log(`[SmartDedup] Matched existing profile "${profile.name}" by ${matchedBy} — updating fields`);
+                }
+
+                newProfiles.push(updated);
+                newCount++;
+
+            } else {
+                // ── NEW PROFILE ────────────────────────────────────────────────
+                profile.old_results = [];
+                newProfiles.push(profile);
+                newCount++;
+            }
         });
+
 
         // 5. Save to Storage (Both Session and Global)
         if (newProfiles.length > 0) {
@@ -865,15 +957,25 @@
 
         // STRICT DOMAIN CHECK: Skip if no domain
         if (!domain && company) {
-            // Try to guess from company name if simple? No, unsafe.
-            // But if we have a company name but no website, maybe we can still list them?
-            // User previously requested strict check. We will stick to it or maybe relax it?
-            // "STRICT DOMAIN CHECK: Skip if no domain" -> Keep this for now as per previous logic.
-            // However, for debugging, let's log if we drop someone.
             console.debug(`Av: Dropping ${name} - No domain found.`);
             return null;
         }
         if (!domain) return null;
+
+        // 6. Employees — try confirmed data-ids first, then fallback via colMap (aria-colindex)
+        let employees = getText('account.number_of_employees', colMap.employees);
+        if (!employees) employees = getText('account.estimated_num_employees', colMap.employees);
+        if (!employees) employees = getText('organization_num_employees', colMap.employees);
+        if (!employees) employees = getText('organization_estimated_num_employees', colMap.employees);
+
+        // Strip trailing + and commas for a clean number string
+        employees = employees.replace(/,/g, '').replace(/\+$/, '').trim();
+
+        // 7. Industry — try confirmed data-ids first, then fallback via colMap (aria-colindex)
+        let industry = getText('account.industries', colMap.industry);
+        if (!industry) industry = getText('account.industry', colMap.industry);
+        if (!industry) industry = getText('organization_industries', colMap.industry);
+        if (!industry) industry = getText('organization_industry', colMap.industry);
 
         return {
             id: Math.random().toString(36).substr(2, 9),
@@ -885,6 +987,8 @@
             companyLinkedin: companyLinkedin,
             domain: domain,
             website: website,
+            employees: employees,
+            industry: industry,
             emails: generateEmails(name, domain),
             selected: true,
             status: 'ready',
@@ -1171,10 +1275,10 @@
         }
 
         // Updated Headers
-        let csvContent = "data:text/csv;charset=utf-8,Name,Title,Company,Location,Domain,Website,Person_LinkedIn,Company_LinkedIn,Email,Status,Verification_Result\n";
+        let csvContent = "data:text/csv;charset=utf-8,Name,Title,Company,Location,Employees,Industry,Domain,Website,Person_LinkedIn,Company_LinkedIn,Email,Status,Verification_Result\n";
 
         state.profiles.forEach(p => {
-            const baseRow = `"${p.name}","${p.title || ''}","${p.company || ''}","${p.location || ''}","${p.domain || ''}","${p.website || ''}","${p.linkedin || ''}","${p.companyLinkedin || ''}"`;
+            const baseRow = `"${p.name}","${p.title || ''}","${p.company || ''}","${p.location || ''}","${p.employees || ''}","${p.industry || ''}","${p.domain || ''}","${p.website || ''}","${p.linkedin || ''}","${p.companyLinkedin || ''}"`;
 
             if (p.results && p.results.length > 0) {
                 p.results.forEach(r => {

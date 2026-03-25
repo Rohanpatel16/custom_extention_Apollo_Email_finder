@@ -1,6 +1,7 @@
 /**
  * storage.js
  * Wrapper for chrome.storage.local to handle CRM data (Global) and Sidebar Session (View)
+ * Also syncs profile data to Turso cloud (fire-and-forget) via TursoSync.
  */
 
 const Storage = {
@@ -50,7 +51,15 @@ const Storage = {
         const merged = Array.from(existingMap.values());
 
         return new Promise((resolve) => {
-            chrome.storage.local.set({ [this.KEYS.PROFILES]: merged }, resolve);
+            chrome.storage.local.set({ [this.KEYS.PROFILES]: merged }, () => {
+                resolve();
+                // 🔵 Turso cloud sync (fire-and-forget)
+                if (typeof TursoSync !== 'undefined') {
+                    TursoSync.upsertProfiles(merged).catch(err =>
+                        console.warn('[TursoSync] upsert failed:', err)
+                    );
+                }
+            });
         });
     },
 
@@ -60,7 +69,15 @@ const Storage = {
      */
     async overwriteGlobalProfiles(profiles) {
         return new Promise((resolve) => {
-            chrome.storage.local.set({ [this.KEYS.PROFILES]: profiles }, resolve);
+            chrome.storage.local.set({ [this.KEYS.PROFILES]: profiles }, () => {
+                resolve();
+                // 🔵 Turso cloud sync: wipe + re-insert remaining (handles deletions)
+                if (typeof TursoSync !== 'undefined') {
+                    TursoSync.deleteAllProfiles()
+                        .then(() => TursoSync.upsertProfiles(profiles))
+                        .catch(err => console.warn('[TursoSync] overwrite failed:', err));
+                }
+            });
         });
     },
 
@@ -100,8 +117,52 @@ const Storage = {
      */
     async clearAllProfiles() {
         return new Promise((resolve) => {
-            chrome.storage.local.remove(this.KEYS.PROFILES, resolve);
+            chrome.storage.local.remove(this.KEYS.PROFILES, () => {
+                resolve();
+                // 🔵 Turso cloud sync: delete everything
+                if (typeof TursoSync !== 'undefined') {
+                    TursoSync.deleteAllProfiles().catch(err =>
+                        console.warn('[TursoSync] deleteAll failed:', err)
+                    );
+                }
+            });
         });
+    },
+
+    /**
+     * Pull ALL profiles from Turso cloud into local storage.
+     * Used by the "Sync from Cloud" button in the dashboard.
+     * @returns {Promise<Array>} the profiles pulled
+     */
+    async pullFromTurso() {
+        if (typeof TursoSync === 'undefined') {
+            console.warn('[TursoSync] TursoSync not available');
+            return [];
+        }
+        const profiles = await TursoSync.getAllProfiles();
+        if (profiles.length > 0) {
+            await new Promise(resolve =>
+                chrome.storage.local.set({ [this.KEYS.PROFILES]: profiles }, resolve)
+            );
+        }
+        return profiles;
+    },
+
+    /**
+     * Push ALL local profiles up to Turso cloud.
+     * Used when Turso is empty but local data exists (first-time backup).
+     * @returns {Promise<number>} number of profiles pushed
+     */
+    async pushToTurso() {
+        if (typeof TursoSync === 'undefined') {
+            console.warn('[TursoSync] TursoSync not available');
+            return 0;
+        }
+        const profiles = await this.getAllProfiles();
+        if (profiles.length > 0) {
+            await TursoSync.upsertProfiles(profiles);
+        }
+        return profiles.length;
     },
 
     /**

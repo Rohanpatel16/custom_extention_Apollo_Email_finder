@@ -10,7 +10,8 @@
         "unlimitedStorage"
     ],
     "host_permissions": [
-        "https://api.apify.com/*"
+        "https://api.apify.com/*",
+        "https://*.turso.io/*"
     ],
     "action": {},
     "background": {
@@ -22,6 +23,7 @@
                 "https://app.apollo.io/*"
             ],
             "js": [
+                "turso.js",
                 "storage.js",
                 "content.js"
             ],

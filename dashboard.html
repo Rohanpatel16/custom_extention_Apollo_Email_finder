@@ -28,6 +28,9 @@
                 <button class="nav-item" data-tab="failed">
                     <span class="icon">❌</span> Failed <span class="badge" id="count-failed">0</span>
                 </button>
+                <button class="nav-item" id="legal-nav-btn">
+                    <span class="icon">📋</span> Legal
+                </button>
             </nav>
 
             <div class="sidebar-footer">
@@ -53,6 +56,7 @@
                 </div>
                 <div class="actions-container">
                     <button id="refresh-btn" class="btn btn-secondary">🔄 Refresh</button>
+                    <button id="sync-cloud-btn" class="btn btn-secondary">☁️ Sync from Cloud</button>
                     <button id="import-btn" class="btn btn-secondary">📥 Import CSV</button>
                     <input type="file" id="import-input" accept=".csv" style="display:none;">
                     <button id="export-btn" class="btn btn-primary">💾 Export Data</button>
@@ -72,6 +76,30 @@
                     <select id="filter-location" class="filter-select">
                         <option value="">All Locations</option>
                     </select>
+                    <select id="filter-industry" class="filter-select">
+                        <option value="">All Industries</option>
+                    </select>
+                    <select id="filter-employees" class="filter-select">
+                        <option value="">All Sizes</option>
+                        <option value="1-10">1 – 10</option>
+                        <option value="11-50">11 – 50</option>
+                        <option value="51-200">51 – 200</option>
+                        <option value="201-500">201 – 500</option>
+                        <option value="501-1000">501 – 1,000</option>
+                        <option value="1001-5000">1,001 – 5,000</option>
+                        <option value="5001-10000">5,001 – 10,000</option>
+                        <option value="10001+">10,001+</option>
+                        <option value="custom">✏️ Custom Range…</option>
+                    </select>
+                </div>
+                <!-- Custom employee range inputs (shown only when "Custom Range" is selected) -->
+                <div id="custom-emp-range" style="display:none; align-items:center; gap:6px; margin-top:6px; flex-wrap:wrap;">
+                    <label style="font-size:12px; color:#6b7280; font-weight:500;">Employees:</label>
+                    <input type="number" id="emp-min" placeholder="Min" min="0" class="filter-select" style="width:90px;">
+                    <span style="font-size:12px; color:#6b7280;">–</span>
+                    <input type="number" id="emp-max" placeholder="Max" min="0" class="filter-select" style="width:90px;">
+                    <button id="emp-apply-btn" style="padding:4px 10px; font-size:12px; background:#4f46e5; color:#fff; border:none; border-radius:6px; cursor:pointer;">Apply</button>
+                    <button id="emp-clear-btn" style="padding:4px 8px; font-size:12px; background:#e5e7eb; color:#374151; border:none; border-radius:6px; cursor:pointer;">✕</button>
                 </div>
                 <div class="view-options">
                     <label><input type="checkbox" id="show-valid-only"> Valid Emails Only</label>
@@ -84,12 +112,14 @@
                     <thead>
                         <tr>
                             <th width="40"><input type="checkbox" id="select-all-rows"></th>
-                            <th width="200">Name / Job</th>
-                            <th width="200">Company</th>
-                            <th width="150">Location</th>
-                            <th width="250">Email / Status</th>
-                            <th width="100">Socials</th>
-                            <th width="80">Action</th>
+                            <th width="180">Name / Job</th>
+                            <th width="180">Company</th>
+                            <th width="100">Employees</th>
+                            <th width="120">Industry</th>
+                            <th width="130">Location</th>
+                            <th width="220">Email / Status</th>
+                            <th width="80">Socials</th>
+                            <th width="60">Action</th>
                         </tr>
                     </thead>
                     <tbody id="table-body">
@@ -107,6 +137,82 @@
                 </div>
             </div>
         </main>
+    </div>
+
+    <!-- Legal Section (full-page overlay inside app) -->
+    <div id="legal-section" style="display:none; position:fixed; inset:0; background:#f9fafb; z-index:100; overflow-y:auto; padding:40px;">
+        <div style="max-width:780px; margin:0 auto;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
+                <h2 style="margin:0; font-size:22px;">📋 Legal</h2>
+                <button id="legal-close-btn" style="background:none; border:1px solid #d1d5db; padding:6px 16px; border-radius:8px; cursor:pointer; font-size:14px;">✕ Close</button>
+            </div>
+
+            <!-- Tabs -->
+            <div style="display:flex; gap:8px; margin-bottom:24px; border-bottom:2px solid #e5e7eb; padding-bottom:8px;">
+                <button class="legal-tab active" data-legal="terms" style="padding:6px 18px; border:none; background:none; font-size:14px; font-weight:600; cursor:pointer; color:#4f46e5; border-bottom:2px solid #4f46e5; margin-bottom:-10px;">Terms &amp; Conditions</button>
+                <button class="legal-tab" data-legal="privacy" style="padding:6px 18px; border:none; background:none; font-size:14px; font-weight:600; cursor:pointer; color:#6b7280;">Privacy Policy</button>
+            </div>
+
+            <!-- Terms & Conditions -->
+            <div id="legal-terms" class="legal-content" style="font-size:14px; line-height:1.8; color:#374151;">
+                <h3>Terms &amp; Conditions</h3>
+                <p><strong>Last updated:</strong> March 2026</p>
+                <p>By installing and using the <strong>Apollo Verifier</strong> Chrome extension (&quot;Extension&quot;), you agree to the following terms. If you do not agree, do not use the Extension.</p>
+
+                <h4>1. Permitted Use</h4>
+                <p>This Extension is provided for professional lead research and email verification purposes only. You agree to use it solely in compliance with all applicable laws, including data protection and anti-spam regulations (GDPR, CAN-SPAM, CASL, etc.).</p>
+
+                <h4>2. Data Scraping &amp; Third-Party Platforms</h4>
+                <p>The Extension reads publicly visible data from pages you are already authorised to access. You are solely responsible for ensuring your use complies with the terms of service of any third-party platform (including Apollo.io).</p>
+
+                <h4>3. No Warranties</h4>
+                <p>The Extension is provided &quot;as is&quot; without warranties of any kind. Email verification results are best-effort and may not be 100% accurate. We make no guarantee of deliverability or validity.</p>
+
+                <h4>4. Limitation of Liability</h4>
+                <p>To the maximum extent permitted by law, the developer shall not be liable for any direct, indirect, incidental, or consequential damages arising from use of the Extension.</p>
+
+                <h4>5. Changes to Terms</h4>
+                <p>These terms may be updated at any time. Continued use of the Extension constitutes acceptance of the revised terms.</p>
+
+                <h4>6. Contact</h4>
+                <p>For questions, contact the developer via the Chrome Web Store listing or the extension's support channel.</p>
+            </div>
+
+            <!-- Privacy Policy -->
+            <div id="legal-privacy" class="legal-content" style="display:none; font-size:14px; line-height:1.8; color:#374151;">
+                <h3>Privacy Policy</h3>
+                <p><strong>Last updated:</strong> March 2026</p>
+                <p>This Privacy Policy describes how <strong>Apollo Verifier</strong> handles your data.</p>
+
+                <h4>1. Data We Collect</h4>
+                <ul>
+                    <li><strong>Lead data</strong> — names, job titles, company names, email addresses, LinkedIn URLs, and company websites scraped from pages you visit.</li>
+                    <li><strong>API Keys</strong> — your Apify API token(s), stored locally in <code>chrome.storage.local</code>.</li>
+                    <li><strong>Verification results</strong> — email validation outcomes returned by the Apify email-checker actor.</li>
+                </ul>
+
+                <h4>2. How We Store Data</h4>
+                <ul>
+                    <li><strong>Locally:</strong> All data is stored in <code>chrome.storage.local</code> on your device.</li>
+                    <li><strong>Cloud (Turso):</strong> If you use the cloud sync feature, profile data is stored in a Turso SQLite database associated with your account. No data is shared with third parties.</li>
+                </ul>
+
+                <h4>3. Data We Do NOT Collect</h4>
+                <p>We do not collect browsing history, passwords, payment information, or any data beyond what is explicitly listed above.</p>
+
+                <h4>4. Third-Party Services</h4>
+                <ul>
+                    <li><strong>Apify</strong> — used for email verification. Emails are sent to Apify's API for validation. Review <a href="https://apify.com/privacy-policy" target="_blank">Apify's Privacy Policy</a>.</li>
+                    <li><strong>Turso</strong> — used for cloud storage of lead data. Review <a href="https://turso.tech/privacy" target="_blank">Turso's Privacy Policy</a>.</li>
+                </ul>
+
+                <h4>5. Your Rights</h4>
+                <p>You can delete all your data at any time using the &quot;Clear All&quot; button in the dashboard. This removes data from both local storage and the Turso cloud database.</p>
+
+                <h4>6. Contact</h4>
+                <p>For privacy-related enquiries, contact the developer via the Chrome Web Store listing.</p>
+            </div>
+        </div>
     </div>
 
     <!-- Export Modal -->
@@ -154,6 +260,7 @@
         </div>
     </div>
 
+    <script src="turso.js"></script>
     <script src="storage.js"></script>
     <script src="dashboard.js"></script>
 </body>
