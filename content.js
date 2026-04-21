@@ -14,7 +14,296 @@
     };
 
     // -------------------------------------------------------------------------
-    // 1. Sidebar HTML Structure
+    // 1. Apollo API Module (MitM — replaces DOM scraper for data collection)
+    // -------------------------------------------------------------------------
+    const ApolloAPI = {
+        PEOPLE_FIELDS: [
+            'contact.id', 'contact.name', 'contact.first_name', 'contact.last_name',
+            'contact.linkedin_url', 'contact.twitter_url', 'contact.facebook_url',
+            'contact.title', 'contact.email', 'contact.email_status',
+            'contact.email_domain_catchall', 'contact.phone_numbers',
+            'contact.city', 'contact.state', 'contact.country',
+            'contact.organization_name', 'contact.organization_id',
+            'account.estimated_num_employees', 'account.domain',
+            'account.industries', 'account.website_url', 'account.linkedin_url'
+        ],
+
+        getCsrfToken() {
+            const match = document.cookie.match(/X-CSRF-TOKEN=([^;]+)/);
+            if (match) return decodeURIComponent(match[1]);
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            return meta ? meta.content : null;
+        },
+
+        async call(endpoint, method = 'GET', body = null) {
+            const headers = { 'Content-Type': 'application/json' };
+            const csrf = this.getCsrfToken();
+            if (csrf && method !== 'GET') headers['X-CSRF-TOKEN'] = csrf;
+            const opts = { method, headers, credentials: 'include' };
+            if (body) opts.body = JSON.stringify({ ...body, cacheKey: Date.now() });
+
+            // Bug 8: retry on transient rate-limit / overload responses
+            for (let attempt = 0; attempt < 3; attempt++) {
+                const res = await fetch(`https://app.apollo.io${endpoint}`, opts);
+                if (res.ok) return res.json();
+
+                // 429 Too Many Requests or 503 Service Unavailable — transient, worth retrying
+                if ((res.status === 429 || res.status === 503) && attempt < 2) {
+                    const delay = 3000 * Math.pow(2, attempt); // 3 000 ms, then 6 000 ms
+                    console.warn(`[ApolloAPI] ${res.status} on ${endpoint} — retrying in ${delay}ms (attempt ${attempt + 1}/3)`);
+                    await new Promise(r => setTimeout(r, delay));
+                    continue;
+                }
+
+                // All other errors (400, 401, 403, 5xx after retries) — throw immediately
+                throw new Error(`Apollo API ${res.status}: ${res.statusText}`);
+            }
+        },
+
+        async searchPeople(filters, page = 1, perPage = 30) {
+            return this.call('/api/v1/mixed_people/search', 'POST', {
+                page,
+                per_page: perPage,
+                display_mode: 'explorer_mode',
+                context: 'people-index-page',
+                finder_version: 2,
+                show_suggestions: false,
+                num_fetch_result: 1,
+                typed_custom_fields: [],
+                fields: this.PEOPLE_FIELDS,
+                ...filters
+            });
+        },
+
+        async loadOrganizations(orgIds) {
+            if (!orgIds || orgIds.length === 0) return { organizations: [] };
+            return this.call('/api/v1/organizations/load_snippets', 'POST', { ids: orgIds });
+        },
+
+        async saveExclusionQuery(domainUrls) {
+            // Bug 1: accept array and join with newline — Apollo accepts multiple URLs in one call
+            const query = Array.isArray(domainUrls) ? domainUrls.join('\n') : domainUrls;
+            const res = await this.call(
+                '/api/v1/organization_search_lists/save_query', 'POST', { query }
+            );
+            // Log raw response once so we can confirm the real list-ID field name in production
+            console.log('[saveExclusionQuery] raw response:', JSON.stringify(res));
+            return res;
+        }
+    };
+
+    // -------------------------------------------------------------------------
+    // 2. URL Filter Parser (reads Apollo's URL hash → API params)
+    // -------------------------------------------------------------------------
+    function parseApolloUrlFilters() {
+        const hash = decodeURIComponent(window.location.hash);
+        const qPart = hash.includes('?') ? hash.split('?')[1] : '';
+        const params = new URLSearchParams(qPart);
+        const filters = {};
+
+        const seniorities = params.getAll('personSeniorities[]');
+        if (seniorities.length) filters.person_seniorities = seniorities;
+
+        const locations = params.getAll('personLocations[]');
+        if (locations.length) filters.person_locations = locations;
+
+        const empRanges = params.getAll('organizationNumEmployeesRanges[]');
+        if (empRanges.length) filters.organization_num_employees_ranges = empRanges;
+
+        const industries = params.getAll('organizationIndustryTagIds[]');
+        if (industries.length) filters.organization_industry_tag_ids = industries;
+
+        const keywords = params.getAll('qOrganizationKeywordTags[]');
+        if (keywords.length) filters.q_organization_keyword_tags = keywords;
+
+        const inclFields = params.getAll('includedOrganizationKeywordFields[]');
+        if (inclFields.length) filters.included_organization_keyword_fields = inclFields;
+
+        const sortAsc = params.get('sortAscending');
+        if (sortAsc !== null) filters.sort_ascending = sortAsc === 'true';
+
+        const sortBy = params.get('sortByField');
+        if (sortBy) filters.sort_by_field = sortBy;
+
+        // CRITICAL: pass the exclusion list ID to the API so the deadlock breaker
+        // actually excludes companies from the search results, not just from Apollo's UI.
+        // Without this, our API calls ignore the exclusion and return the same companies.
+        const notOrgListId = params.get('qNotOrganizationSearchListId');
+        if (notOrgListId) {
+            filters.q_not_organization_search_list_id = notOrgListId;
+            console.log('[Filters] Exclusion list active:', notOrgListId);
+        }
+
+        // Person title filter (e.g. "CEO", "Founder")
+        const titles = params.getAll('personTitles[]');
+        if (titles.length) filters.person_titles = titles;
+
+        // Department / sub-department filter
+        const depts = params.getAll('personDepartmentOrSubdepartments[]');
+        if (depts.length) filters.person_department_or_subdepartments = depts;
+
+        // exist_fields — CRITICAL for "Organization domain = Known" filter.
+        // Without this, our API calls return people with NO website even when the
+        // user has added the domain filter in Apollo UI.
+        const existFields = params.getAll('existFields[]');
+        if (existFields.length) {
+            filters.exist_fields = existFields;
+            console.log('[Filters] exist_fields active:', existFields);
+        }
+
+        return filters;
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. Profile Mapper (replaces parseProfileRow — fixes LinkedIn/domain/emp bugs)
+    // -------------------------------------------------------------------------
+    function mapPersonToProfile(person, orgSnippet) {
+        const org = person.organization || {};
+        const snippet = orgSnippet || {};
+
+        // Domain extraction — try every available field before dropping the profile.
+        // Apollo's search response often has website_url=null but the org snippet
+        // (from loadOrganizations) may have primary_domain or website_url populated.
+        const website =
+            org.website_url ||
+            snippet.website_url ||
+            (org.primary_domain     ? `https://${org.primary_domain}`     : '') ||
+            (snippet.primary_domain ? `https://${snippet.primary_domain}` : '') ||
+            '';
+
+        let domain = '';
+        if (website) {
+            try { domain = new URL(website).hostname.replace(/^www\./, ''); } catch (e) {}
+        }
+
+        // Last resort: if the org has a primary_domain field directly, use it
+        if (!domain && org.primary_domain)    domain = org.primary_domain.replace(/^www\./, '');
+        if (!domain && snippet.primary_domain) domain = snippet.primary_domain.replace(/^www\./, '');
+
+        if (!domain) {
+            console.debug(`[API] Dropping ${person.name} — no domain in any org field`);
+            return null;
+        }
+
+        // Bug 1 fix: only store personal /in/ LinkedIn URLs
+        const liRaw = person.linkedin_url || '';
+        const linkedin = liRaw.includes('linkedin.com/in/') ? liRaw : '';
+
+        // New fields: company_keywords + secondary_industries
+        const companyKeywords = snippet.keywords || org.keywords || [];
+        const secondaryIndustries = snippet.secondary_industries || org.secondary_industries || [];
+
+        const fullName = person.name ||
+            `${person.first_name || ''} ${person.last_name || ''}`.trim();
+
+        return {
+            id: Math.random().toString(36).substr(2, 9),
+            name: fullName,
+            title: person.title || '',
+            // Bug 3 fix: structured location parts (not a single scraped text cell)
+            location: [person.city, person.state, person.country].filter(Boolean).join(', '),
+            linkedin,
+            company: org.name || snippet.name || person.organization_name || '',
+            companyLinkedin: org.linkedin_url || snippet.linkedin_url || '',
+            domain,
+            website: website || `https://${domain}`,
+            // Bug 2 fix: exact integer from API, not "2,000+" text from DOM
+            employees: String(org.estimated_num_employees || snippet.estimated_num_employees || ''),
+            industry: (org.industries || snippet.industries || [org.industry || snippet.industry || ''])[0] || '',
+            companyKeywords,
+            secondaryIndustries,
+            // Apify flow fields — UNCHANGED
+            emails: generateEmails(fullName, domain),
+            selected: true,
+            status: 'ready',
+            results: [],
+            old_results: []
+        };
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. Deadlock Breaker (for stuck employee-count filter situations)
+    // -------------------------------------------------------------------------
+    async function activateDeadlockBreaker() {
+        const domainCount = state.sessionDomains.size;
+        if (domainCount === 0) return false;
+
+        // Accumulate into the persistent set BEFORE clearing sessionDomains.
+        // This fixes a critical bug: if deadlock fires multiple times, each new
+        // save_query must include ALL ever-seen domains, not just the latest batch.
+        // Without this, deadlock #2 would only exclude the 2nd batch — the 1st
+        // batch of companies comes back in results.
+        state.sessionDomains.forEach(d => state.allExcludedDomains.add(d));
+
+        const totalDomains = state.allExcludedDomains.size;
+        const newDomains   = domainCount;
+        setAutoScrapeStatus(
+            `Deadlock detected — building exclusion list (${newDomains} new + ${totalDomains - newDomains} carry-over = ${totalDomains} total)…`
+        );
+        showToast(`🔄 Deadlock: excluding ${totalDomains} companies total`, 'neutral');
+
+        // Build URL list from the COMPLETE accumulated set
+        const allUrls = Array.from(state.allExcludedDomains).map(d => `https://${d}/`);
+        setAutoScrapeStatus(`Registering ${allUrls.length} domains for exclusion…`);
+
+        let listId = null;
+        try {
+            const res = await ApolloAPI.saveExclusionQuery(allUrls);
+            // Confirmed real field: res.listId (camelCase — seen in production console log)
+            listId = res?.listId
+                || res?.organization_search_list?.id
+                || res?.model?.id
+                || res?.list_id
+                || res?.id
+                || null;
+            if (listId) {
+                console.log('[Deadlock] Exclusion list registered:', listId,
+                    `(${allUrls.length} domains, cycle #${state._deadlockCycle = (state._deadlockCycle||0)+1})`);
+            } else {
+                console.warn('[Deadlock] save_query response had no recognisable ID field:', JSON.stringify(res));
+            }
+            setAutoScrapeStatus(`Exclusion list ready: ${listId || 'failed'}`);
+        } catch (e) {
+            console.warn('[Deadlock] save_query failed:', e);
+        }
+
+        if (!listId) {
+            showToast('Deadlock breaker: no list registered — stopping.', 'error');
+            return false;
+        }
+
+        // Inject the exclusion list ID into the URL hash.
+        // Apollo supports ONE qNotOrganizationSearchListId per search.
+        // REPLACE any existing value so each deadlock cycle uses the latest list
+        // (which now contains ALL domains, including all previous cycles).
+        let hash = window.location.hash;
+        const newEncId = encodeURIComponent(listId);
+        if (hash.includes('qNotOrganizationSearchListId=')) {
+            hash = hash.replace(
+                /qNotOrganizationSearchListId=[^&]*/,
+                `qNotOrganizationSearchListId=${newEncId}`
+            );
+        } else {
+            hash += `&qNotOrganizationSearchListId=${newEncId}`;
+        }
+        // Reset to page 1 so Apollo starts fresh with exclusions active
+        hash = hash.replace(/page=\d+/, 'page=1');
+        window.location.hash = hash;
+
+        // Clear session domains for the NEXT cycle only.
+        // allExcludedDomains is never cleared — it carries over to future deadlocks.
+        state.sessionDomains.clear();
+
+        showToast(`✅ Deadlock broken — ${allUrls.length} companies excluded total`, 'success');
+        setAutoScrapeStatus('Deadlock broken — resuming with exclusions active...');
+
+        // Wait for Apollo UI to apply the new filter
+        await new Promise(r => setTimeout(r, 3500));
+        return true;
+    }
+
+    // -------------------------------------------------------------------------
+    // 5. Sidebar HTML Structure
     // -------------------------------------------------------------------------
     const sidebarHTML = `
         <div id="apollo-verifier-sidebar">
@@ -133,7 +422,9 @@
         isVerifying: false,
         autoScraping: false,
         autoScrapePageCount: 0,
-        autoScrapeMode: 'batch'   // 'batch' = 5 pages then verify | 'perpage' = verify after each page
+        autoScrapeMode: 'batch',   // 'batch' = 5 pages then verify | 'perpage' = verify after each page
+        sessionDomains: new Set(),    // domains seen since LAST deadlock fire
+        allExcludedDomains: new Set() // ALL domains ever seen this session — never cleared
     };
 
     function showToast(message, type = 'neutral') {
@@ -377,83 +668,19 @@
     // -------------------------------------------------------------------------
 
     /**
-     * Reads employee count cells and returns the highest number visible.
-     * Strategy:
-     * 1. Try data-id="account.estimated_num_employees" (Apollo standard)
-     * 2. Dynamically find column by scanning headers for "employee" text
-     * 3. Last resort: brute-force scan all cells for number-only values
+     * Returns the highest employee count seen across all profiles in the current session.
+     * Now reads directly from state.profiles (populated by API) instead of scanning the DOM.
      */
     function getHighestEmployeeCount() {
-        const parseCount = raw => {
-            const n = parseInt(String(raw).replace(/,/g, '').replace(/\+/g, '').trim(), 10);
-            return isNaN(n) ? null : n;
-        };
-
-        const counts = [];
-
-        // Strategy 1: Apollo renders employee count in cells with these data-ids
-        const empDataIds = [
-            'account.number_of_employees',
-            'account.estimated_num_employees',
-            'organization_num_employees',
-            'organization_estimated_num_employees'
-        ];
-        empDataIds.forEach(did => {
-            document.querySelectorAll(`[data-id="${did}"]`).forEach(cell => {
-                const n = parseCount(cell.textContent);
-                if (n && n > 0) counts.push(n);
-            });
-        });
-
+        const counts = state.profiles
+            .map(p => parseInt(String(p.employees || '').replace(/,/g, '').replace(/\+/g, '').trim(), 10))
+            .filter(n => !isNaN(n) && n > 0);
         if (counts.length > 0) {
-            console.log('[AutoScrape] Employee counts via data-id:', counts);
-            return Math.max(...counts);
+            const max = Math.max(...counts);
+            console.log('[AutoScrape] Max employee count from session profiles:', max);
+            return max;
         }
-
-        // Strategy 2: Find which column header says "employee", then read that column
-        let employeeColIndex = null;
-        document.querySelectorAll('[role="columnheader"]').forEach(header => {
-            const text = header.textContent.toLowerCase();
-            if (text.includes('employee')) {
-                const idx = header.getAttribute('aria-colindex');
-                if (idx) employeeColIndex = idx;
-            }
-        });
-
-        if (employeeColIndex) {
-            document.querySelectorAll('[role="row"]').forEach(row => {
-                if (row.querySelector('[role="columnheader"]')) return;
-                const cell = row.querySelector(`[aria-colindex="${employeeColIndex}"]`);
-                if (cell) {
-                    const n = parseCount(cell.textContent);
-                    if (n && n > 0) counts.push(n);
-                }
-            });
-        }
-
-        if (counts.length > 0) {
-            console.log(`[AutoScrape] Employee counts via header colindex ${employeeColIndex}:`, counts);
-            return Math.max(...counts);
-        }
-
-        // Strategy 3: Brute-force — look for cells containing only a number (1-6 digits)
-        document.querySelectorAll('[role="row"]').forEach(row => {
-            if (row.querySelector('[role="columnheader"]')) return;
-            row.querySelectorAll('[role="cell"], [role="gridcell"]').forEach(cell => {
-                const text = cell.textContent.trim().replace(/,/g, '');
-                if (/^\d{1,6}\+?$/.test(text)) {
-                    const n = parseCount(text);
-                    if (n && n > 0) counts.push(n);
-                }
-            });
-        });
-
-        if (counts.length > 0) {
-            console.log('[AutoScrape] Employee counts via brute-force scan:', counts);
-            return Math.max(...counts);
-        }
-
-        console.warn('[AutoScrape] Could not detect employee counts on this page.');
+        console.warn('[AutoScrape] No employee counts in session profiles.');
         return null;
     }
 
@@ -591,11 +818,26 @@
                     pageCount = 0;
                     await wait(3500);
                 } else {
-                    showToast('🤖 Auto-Scrape complete — no more results.', 'success');
-                    setAutoScrapeStatus('Complete ✅');
-                    state.autoScraping = false;
-                    document.getElementById('av-autoscrape-toggle').checked = false;
-                    break;
+                    // Deadlock: employee count didn't advance — try exclusion breaker
+                    if (state.sessionDomains.size > 0) {
+                        const broke = await activateDeadlockBreaker();
+                        if (!broke) {
+                            showToast('🤖 Auto-Scrape complete — no more results.', 'success');
+                            setAutoScrapeStatus('Complete ✅');
+                            state.autoScraping = false;
+                            document.getElementById('av-autoscrape-toggle').checked = false;
+                            break;
+                        }
+                        // Deadlock broken — reset page counter and continue
+                        pageCount = 0;
+                        state.autoScrapePageCount = 0;
+                    } else {
+                        showToast('🤖 Auto-Scrape complete — no more results.', 'success');
+                        setAutoScrapeStatus('Complete ✅');
+                        state.autoScraping = false;
+                        document.getElementById('av-autoscrape-toggle').checked = false;
+                        break;
+                    }
                 }
             }
         } else {
@@ -648,11 +890,25 @@
                     pageCount = 0;
                     await wait(3500);
                 } else {
-                    showToast('🤖 Auto-Scrape complete — no more results.', 'success');
-                    setAutoScrapeStatus('Complete ✅');
-                    state.autoScraping = false;
-                    document.getElementById('av-autoscrape-toggle').checked = false;
-                    break;
+                    // Deadlock: employee count didn't advance — try exclusion breaker
+                    if (state.sessionDomains.size > 0) {
+                        const broke = await activateDeadlockBreaker();
+                        if (!broke) {
+                            showToast('🤖 Auto-Scrape complete — no more results.', 'success');
+                            setAutoScrapeStatus('Complete ✅');
+                            state.autoScraping = false;
+                            document.getElementById('av-autoscrape-toggle').checked = false;
+                            break;
+                        }
+                        pageCount = 0;
+                        state.autoScrapePageCount = 0;
+                    } else {
+                        showToast('🤖 Auto-Scrape complete — no more results.', 'success');
+                        setAutoScrapeStatus('Complete ✅');
+                        state.autoScraping = false;
+                        document.getElementById('av-autoscrape-toggle').checked = false;
+                        break;
+                    }
                 }
             }
         }
@@ -662,120 +918,154 @@
         }
     }
 
-    // Helper to get dynamic column indices from headers
-    function getColumnIndexes() {
-        const mapping = {
-            name: 1, // Default fallback
-            title: 3,
-            location: 2,
-            linkedin: 4,
-            company: 6,
-            companySocial: 5,
-            employees: null,
-            industry: null
-        };
-
-        const headers = document.querySelectorAll('[role="columnheader"]');
-        headers.forEach(h => {
-            const id = h.getAttribute('data-id');
-            const idx = h.getAttribute('aria-colindex');
-            
-            if (idx) {
-                // 1. Detect by common Apollo data-ids
-                if (id) {
-                    if (id === 'contact.name') mapping.name = idx;
-                    if (id === 'contact.job_title') mapping.title = idx;
-                    if (id === 'contact.location') mapping.location = idx;
-                    if (id === 'contact.social') mapping.linkedin = idx;
-                    if (id === 'contact.account') mapping.company = idx;
-                    if (id === 'account.social') mapping.companySocial = idx;
-                    // Employees variants
-                    if (id === 'account.estimated_num_employees' || 
-                        id === 'account.number_of_employees' || 
-                        id === 'organization_num_employees' ||
-                        id === 'organization_estimated_num_employees') {
-                        mapping.employees = idx;
-                    }
-                    // Industry variants
-                    if (id === 'account.industry' || 
-                        id === 'account.industries' || 
-                        id === 'organization_industry' ||
-                        id === 'organization_industries') {
-                        mapping.industry = idx;
-                    }
-                }
-
-                // 2. Fallback: Detect by header text (inclusive)
-                const text = h.textContent.toLowerCase();
-                if (text.includes('employ')) mapping.employees = idx;
-                if (text.includes('industr')) mapping.industry = idx; // matches 'industry' and 'industries'
-            }
-        });
-        return mapping;
-    }
-
+    // -------------------------------------------------------------------------
+    // extractProfiles — now uses Apollo API instead of DOM scraping
+    // -------------------------------------------------------------------------
     async function extractProfiles(isAuto = false) {
-        const colMap = getColumnIndexes();
+        const currentPage = getCurrentPageFromUrl();
+        const filters = parseApolloUrlFilters();
 
-        const rows = document.querySelectorAll('[role="row"]');
-        let newCount = 0;
-        const newProfiles = [];
+        // Apollo sometimes returns an empty 200 OK immediately after a filter/hash
+        // change (e.g. right after the deadlock exclusion is applied).
+        // The UI catches up fine but the API needs a moment — retry up to 3×.
+        let data = null;
+        const MAX_EMPTY_RETRIES = 3;
+        for (let attempt = 1; attempt <= MAX_EMPTY_RETRIES; attempt++) {
+            try {
+                data = await ApolloAPI.searchPeople(filters, currentPage);
+            } catch (err) {
+                console.error('[ApolloAPI] searchPeople failed:', err);
+                showToast(`API Error: ${err.message}`, 'error');
+                return 0;
+            }
 
-        // Fetch Global CRM to build smart lookup maps
+            if (data.people && data.people.length > 0) break; // ✅ got results
+
+            if (attempt < MAX_EMPTY_RETRIES) {
+                console.warn(
+                    `[extractProfiles] Empty response page=${currentPage}` +
+                    ` (attempt ${attempt}/${MAX_EMPTY_RETRIES}) — waiting 3 s…`
+                );
+                setAutoScrapeStatus(
+                    `Page ${currentPage}: Apollo returned empty — retrying (${attempt}/${MAX_EMPTY_RETRIES})…`
+                );
+                await new Promise(r => setTimeout(r, 3000));
+            }
+        }
+
+        if (!data || !data.people || data.people.length === 0) {
+            showToast('No results from API on this page (after 3 attempts).', 'neutral');
+            return 0;
+        }
+
+
+        // ── Pass 1: load org snippets for all org IDs ──────────────────────
+        const orgIds = [...new Set(
+            data.people.map(p => p.organization_id).filter(Boolean)
+        )];
+
+        let orgMap = {};
+        if (orgIds.length > 0) {
+            try {
+                const orgData = await ApolloAPI.loadOrganizations(orgIds);
+                (orgData.organizations || []).forEach(org => { orgMap[org.id] = org; });
+            } catch (err) {
+                console.warn('[ApolloAPI] loadOrganizations pass-1 failed (non-fatal):', err);
+            }
+        }
+
+        // ── Pass 2: for people whose org still has no website, re-query ────
+        // The search endpoint embeds a minimal org stub — the snippet endpoint
+        // often has primary_domain populated even when website_url is null.
+        const noWebsiteOrgIds = data.people
+            .filter(p => {
+                const org = p.organization || {};
+                const snip = orgMap[p.organization_id] || {};
+                return !org.website_url && !snip.website_url &&
+                       !org.primary_domain && !snip.primary_domain;
+            })
+            .map(p => p.organization_id)
+            .filter(Boolean);
+
+        if (noWebsiteOrgIds.length > 0) {
+            console.log(`[extractProfiles] Pass-2 re-query for ${noWebsiteOrgIds.length} orgs with no website`);
+            try {
+                const orgData2 = await ApolloAPI.loadOrganizations(noWebsiteOrgIds);
+                (orgData2.organizations || []).forEach(org => {
+                    // Merge into orgMap — prefer pass-2 data for domain fields
+                    orgMap[org.id] = { ...(orgMap[org.id] || {}), ...org };
+                });
+            } catch (err) {
+                console.warn('[ApolloAPI] loadOrganizations pass-2 failed (non-fatal):', err);
+            }
+        }
+
+        // Fetch Global CRM to build smart dedup maps (same logic as before)
         let globalProfiles = [];
         if (window.StorageWrapper) {
             globalProfiles = await StorageWrapper.getAllProfiles();
         }
 
-        // ── Build lookup maps ──────────────────────────────────────────────────
-        // Priority 1: LinkedIn URL (never changes across jobs)
         const linkedinMap = new Map();
-        // Priority 2: Exact name (case-insensitive)
         const nameMap = new Map();
-        // Legacy: name + domain (exact match, no job change)
         const nameDomainMap = new Map();
 
         globalProfiles.forEach(p => {
             if (p.linkedin) linkedinMap.set(p.linkedin.trim().toLowerCase(), p);
             const nameKey = (p.name || '').trim().toLowerCase();
-            if (nameKey && !nameMap.has(nameKey)) nameMap.set(nameKey, p); // first occurrence wins
+            if (nameKey && !nameMap.has(nameKey)) nameMap.set(nameKey, p);
             const ndKey = (p.name + '|' + p.domain).toLowerCase();
             nameDomainMap.set(ndKey, p);
         });
 
-        rows.forEach((row) => {
-            // Skip header rows
-            if (row.querySelector('[role="columnheader"]')) return;
+        const newProfiles = [];
+        let newCount = 0;
 
-            const profile = parseProfileRow(row, colMap);
-            if (!profile) return;
+        for (const person of data.people) {
+            const orgSnippet = orgMap[person.organization_id] || null;
+            const profile = mapPersonToProfile(person, orgSnippet);
+            if (!profile) continue;
+
+            // Track domain for deadlock detection
+            if (profile.domain) state.sessionDomains.add(profile.domain);
 
             // ── Check already in CURRENT SESSION (Sidebar) ────────────────────
             const inSession = state.profiles.some(p =>
                 (p.linkedin && p.linkedin === profile.linkedin) ||
                 (p.name === profile.name && p.domain === profile.domain)
             );
-            if (inSession) return;
+            if (inSession) continue;
 
-            // ── Smart CRM lookup ───────────────────────────────────────────────
+            // ── Smart CRM lookup (3-tier) ──────────────────────────────────────
+            // Tier 1: LinkedIn URL — globally unique, most reliable
+            // Tier 2: name + domain — precise; prevents "Rajesh Shah @ CompanyA"
+            //         from merging with "Rajesh Shah @ CompanyB"
+            // Tier 3: name only — last resort, only when neither side has LinkedIn
+            //         (avoids false merges on common Indian names)
             let existing = null;
             let matchedBy = null;
 
-            // 1. LinkedIn URL match (most reliable)
+            // Tier 1 — LinkedIn
             if (profile.linkedin) {
                 const li = profile.linkedin.trim().toLowerCase();
-                if (linkedinMap.has(li)) {
-                    existing = linkedinMap.get(li);
-                    matchedBy = 'linkedin';
-                }
+                if (linkedinMap.has(li)) { existing = linkedinMap.get(li); matchedBy = 'linkedin'; }
             }
 
-            // 2. Name-only match (catches job changes)
-            if (!existing) {
+            // Tier 2 — name + domain (exact company match)
+            if (!existing && profile.name && profile.domain) {
+                const ndKey = (profile.name + '|' + profile.domain).toLowerCase();
+                if (nameDomainMap.has(ndKey)) { existing = nameDomainMap.get(ndKey); matchedBy = 'name+domain'; }
+            }
+
+            // Tier 3 — name only, but ONLY when neither side has a LinkedIn URL
+            // (if either has LinkedIn we would have already matched via Tier 1, or
+            //  they are genuinely different people who happen to share a name)
+            if (!existing && profile.name && !profile.linkedin) {
                 const nameKey = (profile.name || '').trim().toLowerCase();
-                if (nameKey && nameMap.has(nameKey)) {
-                    existing = nameMap.get(nameKey);
-                    matchedBy = 'name';
+                const candidate = nameMap.get(nameKey);
+                if (candidate && !candidate.linkedin) {
+                    existing = candidate;
+                    matchedBy = 'name-only';
                 }
             }
 
@@ -784,12 +1074,10 @@
                 const domainChanged = existing.domain && profile.domain &&
                     existing.domain.toLowerCase() !== profile.domain.toLowerCase();
 
-                // Archive old verified emails if domain changed (job change)
                 let old_results = Array.isArray(existing.old_results) ? [...existing.old_results] : [];
                 if (domainChanged && existing.results && existing.results.length > 0) {
                     const oldVerified = existing.results.filter(r => r.result === 'ok');
                     if (oldVerified.length > 0) {
-                        // Avoid duplicating already-archived results
                         const archivedEmails = new Set(old_results.map(r => r.email));
                         oldVerified.forEach(r => {
                             if (!archivedEmails.has(r.email)) {
@@ -799,208 +1087,87 @@
                     }
                 }
 
-                // Merge: keep current verified results only for the CURRENT domain
-                // If domain changed, reset results (will re-verify under new domain)
-                const currentResults = domainChanged ? [] : (existing.results || []);
-
-                // Build updated profile — refresh all mutable fields, keep identity fields
                 const updated = {
-                    ...profile,                          // new scraped fields (title, company, domain, etc.)
-                    id: existing.id,                     // keep stable ID
+                    ...profile,
+                    id: existing.id,
                     status: domainChanged ? 'ready' : existing.status,
-                    results: currentResults,
-                    old_results: old_results,
+                    results: domainChanged ? [] : (existing.results || []),
+                    old_results,
                     jobChanged: domainChanged,
-                    emails: profile.emails               // regenerated from new domain in parseProfileRow
+                    emails: profile.emails
                 };
 
                 if (domainChanged) {
-                    console.log(`[SmartDedup] Job change detected for "${profile.name}": ${existing.domain} → ${profile.domain}`);
+                    console.log(`[SmartDedup] Job change: "${profile.name}" ${existing.domain} → ${profile.domain}`);
                 } else {
-                    console.log(`[SmartDedup] Matched existing profile "${profile.name}" by ${matchedBy} — updating fields`);
+                    console.log(`[SmartDedup] Matched "${profile.name}" by ${matchedBy}`);
                 }
 
                 newProfiles.push(updated);
                 newCount++;
-
             } else {
                 // ── NEW PROFILE ────────────────────────────────────────────────
                 profile.old_results = [];
                 newProfiles.push(profile);
                 newCount++;
             }
-        });
+        }
 
-
-        // 5. Save to Storage (Both Session and Global)
-        if (newProfiles.length > 0) {
-            if (window.StorageWrapper) {
-                // Save to Global CRM (Persist) - SKIP FOR NOW (Only save after verify)
-                // StorageWrapper.saveAllProfiles(newProfiles).catch(err => console.error("Global Save Error:", err));
-
-                // Update Local State (Session)
-                state.profiles = [...state.profiles, ...newProfiles];
-
-                // Save to Sidebar Session (View)
-                StorageWrapper.saveSidebarSession(state.profiles).catch(err => console.error("Session Save Error:", err));
-
-                showToast("Added to Sidebar (Verify to Save)", "neutral");
-            }
+        // Save to storage (same pattern as before)
+        if (newProfiles.length > 0 && window.StorageWrapper) {
+            state.profiles = [...state.profiles, ...newProfiles];
+            StorageWrapper.saveSidebarSession(state.profiles)
+                .catch(err => console.error('Session Save Error:', err));
+            showToast('Added to Sidebar (Verify to Save)', 'neutral');
         }
 
         if (newCount > 0) {
             document.getElementById('av-results-area').classList.remove('av-hidden');
             document.getElementById('av-status-text').textContent = `Found ${newCount} new profiles`;
-            showToast(`Extracted ${newCount} profiles`, "success");
+            showToast(`Extracted ${newCount} profiles`, 'success');
             renderList();
 
-            // AUTO VERIFY — skip when Auto-Scrape is running (batch verify happens after 5 pages)
+            // Auto-verify — same logic as before, skipped when auto-scraping
             if (!state.autoScraping) {
                 const needsVerification = newProfiles.some(p => p.status !== 'verified' && p.status !== 'failed');
                 if (needsVerification) {
-                    showToast("Auto-verifying new profiles...", "neutral");
-                    setTimeout(() => {
-                        verifyProfiles(false);
-                    }, 1000);
+                    showToast('Auto-verifying new profiles...', 'neutral');
+                    setTimeout(() => verifyProfiles(false), 1000);
                 } else {
-                    showToast("Profiles loaded from CRM (Already Processed)", "neutral");
+                    showToast('Profiles loaded from CRM (Already Processed)', 'neutral');
                 }
             }
-
         } else {
-            showToast("No new profiles found on this page.", "neutral");
+            showToast('No new profiles found on this page.', 'neutral');
         }
-        
+
         return newCount;
     }
 
-    /**
-     * Parses a single table row to extract profile data
-     * @param {HTMLElement} row 
-     * @param {Object} colMap
-     * @returns {Object|null}
-     */
-    function parseProfileRow(row, colMap) {
-        // Name is usually in the first or second column, often has specific class or testid
-        const nameEl = row.querySelector('[data-testid="contact-name-cell"] a') ||
-            row.querySelector(`[aria-colindex="${colMap.name}"] a`) ||
-            row.querySelector('.zp_x0e0J a'); // Fallback class if known
+    // REMOVED: getColumnIndexes() — not needed, API returns named JSON fields
+    // REMOVED: parseProfileRow() — replaced by mapPersonToProfile()
 
-        if (!nameEl) return null;
-        const name = nameEl.textContent.trim();
+    // parseProfileRow() REMOVED — replaced by mapPersonToProfile() above.
+    // getColumnIndexes() REMOVED — not needed; API returns named JSON fields.
+    // Old DOM-based extractProfiles() REMOVED — replaced by API version above.
 
-        // Helper to get text by data-id OR column index
-        const getText = (dataId, colIndex) => {
-            let el = row.querySelector(`[data-id="${dataId}"]`);
-            if (!el && colIndex) {
-                el = row.querySelector(`[aria-colindex="${colIndex}"]`);
-            }
-            return el ? el.textContent.trim() : "";
-        };
 
-        // Helper to get links by data-id OR column index
-        const getLinks = (dataId, colIndex) => {
-            let el = row.querySelector(`[data-id="${dataId}"]`);
-            if (!el && colIndex) {
-                el = row.querySelector(`[aria-colindex="${colIndex}"]`);
-            }
-            return el ? Array.from(el.querySelectorAll('a')) : [];
-        };
-
-        // 1. Job Title
-        const title = getText('contact.job_title', colMap.title);
-
-        // 2. Location
-        const location = getText('contact.location', colMap.location);
-
-        // 3. Person LinkedIn
-        let linkedin = "";
-        const socialLinks = getLinks('contact.social', colMap.linkedin);
-        socialLinks.forEach(a => {
-            if (a.href && a.href.includes('linkedin')) {
-                linkedin = a.href;
-            }
-        });
-
-        // 4. Company Name
-        const company = getText('contact.account', colMap.company);
-
-        // 5. Company Socials (Website & LinkedIn)
-        let website = "";
-        let companyLinkedin = "";
-
-        const companySocialLinks = getLinks('account.social', colMap.companySocial);
-        companySocialLinks.forEach(a => {
-            if (a.href) {
-                if (a.href.includes('linkedin')) {
-                    companyLinkedin = a.href;
-                } else if (!a.href.includes('twitter') && !a.href.includes('facebook') && a.href.startsWith('http')) {
-                    website = a.href;
-                }
-            }
-        });
-
-        // Fallback for website if not found in account.social
-        if (!website) {
-            const websiteElement = row.querySelector('a[aria-label="website link"]');
-            if (websiteElement) website = websiteElement.href;
-        }
-
-        // Extract Domain
-        let domain = "";
-        if (website) {
-            try {
-                const url = new URL(website);
-                domain = url.hostname.replace(/^www\./, "");
-            } catch (e) { }
-        }
-
-        // STRICT DOMAIN CHECK: Skip if no domain
-        if (!domain && company) {
-            console.debug(`Av: Dropping ${name} - No domain found.`);
-            return null;
-        }
-        if (!domain) return null;
-
-        // 6. Employees — try confirmed data-ids first, then fallback via colMap (aria-colindex)
-        let employees = getText('account.number_of_employees', colMap.employees);
-        if (!employees) employees = getText('account.estimated_num_employees', colMap.employees);
-        if (!employees) employees = getText('organization_num_employees', colMap.employees);
-        if (!employees) employees = getText('organization_estimated_num_employees', colMap.employees);
-
-        // Strip trailing + and commas for a clean number string
-        employees = employees.replace(/,/g, '').replace(/\+$/, '').trim();
-
-        // 7. Industry — try confirmed data-ids first, then fallback via colMap (aria-colindex)
-        let industry = getText('account.industries', colMap.industry);
-        if (!industry) industry = getText('account.industry', colMap.industry);
-        if (!industry) industry = getText('organization_industries', colMap.industry);
-        if (!industry) industry = getText('organization_industry', colMap.industry);
-
-        return {
-            id: Math.random().toString(36).substr(2, 9),
-            name: name,
-            title: title,
-            location: location,
-            linkedin: linkedin,
-            company: company,
-            companyLinkedin: companyLinkedin,
-            domain: domain,
-            website: website,
-            employees: employees,
-            industry: industry,
-            emails: generateEmails(name, domain),
-            selected: true,
-            status: 'ready',
-            results: []
-        };
-    }
 
     function generateEmails(fullName, domain) {
         if (!fullName || !domain) return [];
         let cleanName = fullName.replace(/^(Dr\.|Mr\.|Mrs\.|Ms\.)\s+/i, '');
         const parts = cleanName.toLowerCase().split(/\s+/);
-        if (parts.length < 2) return [`info@${domain}`, `contact@${domain}`];
+
+        // Single-word name (e.g. "Dev") — can't do first.last patterns,
+        // so try the name itself first, then generic fallbacks
+        if (parts.length < 2) {
+            const single = parts[0].replace(/[^a-z0-9]/g, '');
+            return [...new Set([
+                `${single}@${domain}`,
+                `info@${domain}`,
+                `contact@${domain}`
+            ])];
+        }
 
         const first = parts[0].replace(/[^a-z0-9]/g, '');
         const last = parts[parts.length - 1].replace(/[^a-z0-9]/g, '');
@@ -1018,7 +1185,7 @@
             await loadActiveKeys();
             if (!state.activeKey) {
                 showToast("Please add API Keys in Dashboard", "error");
-                return;
+                return false; // Bug 5: explicit false so auto-scrape loop doesn't misread as API error
             }
         }
 
@@ -1048,12 +1215,8 @@
             allEmails = [...new Set(allEmails)];
 
             if (allEmails.length === 0) {
-                // No emails to verify (e.g. only profiles with no domain?)
-                // Just mark them as failed or done?
-                toVerify.forEach(p => p.status = 'verified'); // Verified that they have no emails?
-                // Or 'failed' because no valid email?
-                // Let's mark as 'failed' (No valid email)
-                toVerify.forEach(p => p.status = 'verified'); // Status verified, but result empty.
+                // Bug 7: no emails were generated (no domain) — mark as failed so Retry button shows
+                toVerify.forEach(p => p.status = 'failed');
 
                 showToast("No emails to verify for selected profiles.", "neutral");
             } else {
@@ -1274,19 +1437,30 @@
             return;
         }
 
-        // Updated Headers
-        let csvContent = "data:text/csv;charset=utf-8,Name,Title,Company,Location,Employees,Industry,Domain,Website,Person_LinkedIn,Company_LinkedIn,Email,Status,Verification_Result\n";
+        // Updated Headers — includes new company_keywords + secondary_industries
+        let csvContent = "data:text/csv;charset=utf-8,Name,Title,Company,Location,Employees,Industry,Secondary_Industries,Company_Keywords,Domain,Website,Person_LinkedIn,Company_LinkedIn,Email,Status,Verification_Result\n";
+
+        // Bug 12: escape all string fields — any field containing " or , would break CSV
+        const csvEsc = v => String(v || '').replace(/"/g, '""');
 
         state.profiles.forEach(p => {
-            const baseRow = `"${p.name}","${p.title || ''}","${p.company || ''}","${p.location || ''}","${p.employees || ''}","${p.industry || ''}","${p.domain || ''}","${p.website || ''}","${p.linkedin || ''}","${p.companyLinkedin || ''}"`;
+            const keywords = (p.companyKeywords || []).join('; ');
+            const secIndustries = (p.secondaryIndustries || []).join('; ');
+            const baseRow = [
+                `"${csvEsc(p.name)}"`, `"${csvEsc(p.title)}"`, `"${csvEsc(p.company)}"`,
+                `"${csvEsc(p.location)}"`, `"${csvEsc(p.employees)}"`, `"${csvEsc(p.industry)}"`,
+                `"${csvEsc(secIndustries)}"`, `"${csvEsc(keywords)}"`,
+                `"${csvEsc(p.domain)}"`, `"${csvEsc(p.website)}"`,
+                `"${csvEsc(p.linkedin)}"`, `"${csvEsc(p.companyLinkedin)}"`
+            ].join(',');
 
             if (p.results && p.results.length > 0) {
                 p.results.forEach(r => {
-                    csvContent += `${baseRow},"${r.email}","${p.status}","${r.result}"\n`;
+                    csvContent += `${baseRow},"${csvEsc(r.email)}","${csvEsc(p.status)}","${csvEsc(r.result)}"\n`;
                 });
             } else {
-                // If no emails yet/failed
-                csvContent += `${baseRow},"","${p.status}",""\n`;
+                // No emails yet or failed
+                csvContent += `${baseRow},"","${csvEsc(p.status)}",""\n`;
             }
         });
 

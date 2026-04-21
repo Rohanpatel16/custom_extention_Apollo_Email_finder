@@ -11,7 +11,8 @@
     ],
     "host_permissions": [
         "https://api.apify.com/*",
-        "https://*.turso.io/*"
+        "https://*.turso.io/*",
+        "https://app.apollo.io/*"
     ],
     "action": {},
     "background": {

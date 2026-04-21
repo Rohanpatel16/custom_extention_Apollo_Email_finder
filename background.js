@@ -43,9 +43,16 @@ async function handleCallApify(emails, apiKey) {
     const runId = startData.data.id;
     const datasetId = startData.data.defaultDatasetId;
 
-    // 2. Poll Result
+    // 2. Poll Result — Bug 6: add MAX_POLLS to prevent infinite loop if Apify run hangs
+    const MAX_POLLS = 150; // 150 × 2 s = 5 minutes maximum wait time
+    let polls = 0;
     while (true) {
         await new Promise(r => setTimeout(r, 2000));
+
+        if (++polls > MAX_POLLS) {
+            throw new Error(`Apify run ${runId} timed out after 5 minutes — check Apify dashboard`);
+        }
+
         const pollRes = await fetch(`https://api.apify.com/v2/acts/${actorId}/runs/${runId}?token=${apiKey}`);
         if (!pollRes.ok) throw new Error("Failed to poll run status");
 

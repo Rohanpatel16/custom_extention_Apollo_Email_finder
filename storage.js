@@ -74,8 +74,17 @@ const Storage = {
                 // 🔵 Turso cloud sync: wipe + re-insert remaining (handles deletions)
                 if (typeof TursoSync !== 'undefined') {
                     TursoSync.deleteAllProfiles()
-                        .then(() => TursoSync.upsertProfiles(profiles))
-                        .catch(err => console.warn('[TursoSync] overwrite failed:', err));
+                        .then(() => {
+                            // Bug 9: skip upsert when there's nothing to insert (avoids a pointless round-trip)
+                            if (profiles.length > 0) {
+                                return TursoSync.upsertProfiles(profiles);
+                            }
+                            console.log('[TursoSync] All profiles cleared — cloud is now empty.');
+                        })
+                        .catch(err => {
+                            // Bug 9: elevated from warn to error — Turso may be empty while local isn't
+                            console.error('[TursoSync] overwrite sync failed — cloud may be out of sync:', err);
+                        });
                 }
             });
         });

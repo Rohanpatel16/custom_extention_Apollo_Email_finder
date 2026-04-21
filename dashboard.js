@@ -231,6 +231,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
+        document.getElementById('clean-links-btn').addEventListener('click', cleanLinkedInLinks);
+
         // Pagination
         document.getElementById('prev-page').addEventListener('click', () => {
             if (currentPage > 1) {
@@ -277,7 +279,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Search
             if (searchQuery) {
-                const searchStr = `${p.name} ${p.company} ${p.title} ${p.location} ${p.employees || ''} ${p.industry || ''}`.toLowerCase();
+                const searchStr = (
+                    `${p.name} ${p.company} ${p.title} ${p.location} ${p.employees || ''} ${p.industry || ''}` +
+                    ` ${(p.companyKeywords || []).join(' ')} ${(p.secondaryIndustries || []).join(' ')}`
+                ).toLowerCase();
                 if (!searchStr.includes(searchQuery)) return false;
             }
 
@@ -425,6 +430,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     </td>
                     <td><div style="font-size:13px;">${p.employees || '-'}</div></td>
                     <td><div style="font-size:13px; color:#6b7280;">${p.industry || '-'}</div></td>
+                    <td><div style="font-size:12px; color:#6b7280;">${(p.secondaryIndustries || []).join(', ') || '-'}</div></td>
+                    <td><div style="font-size:12px; color:#94a3b8;">${(p.companyKeywords || []).slice(0,5).join(', ') || '-'}</div></td>
                     <td>${p.location || '-'}</td>
                     <td>${emailHtml}</td>
                     <td>${socialsHtml}</td>
@@ -469,15 +476,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function downloadCSV(data) {
-        const header = ["Name", "Title", "Company", "Employees", "Industry", "Location", "Domain", "Website", "Person_LinkedIn", "Company_LinkedIn", "Email", "Verification_Status"];
+        const header = ["Name", "Title", "Company", "Employees", "Industry", "Secondary_Industries", "Company_Keywords", "Location", "Domain", "Website", "Person_LinkedIn", "Company_LinkedIn", "Email", "Verification_Status"];
         let csvContent = header.join(",") + "\n";
 
         data.forEach(p => {
-            // If multiple emails, replicate row? or comma separate? Replicating row is cleaner for CSV usage
+            // Bug 11: escape all string fields — commas and quotes inside values break CSV
+            const csvEsc = v => String(v || '').replace(/"/g, '""');
+            const keywords = (p.companyKeywords || []).join('; ');
+            const secIndustries = (p.secondaryIndustries || []).join('; ');
+
+            // If multiple emails, replicate row for cleaner CSV usage
             let emails = [];
             if (p.results && p.results.length > 0) {
-                // if validOnly is checked we already filtered dataToExport, but we might want to filter specific emails here too?
-                // If the user wants valid only, we should only export valid emails of that person.
                 const isExportValidOnly = document.getElementById('export-valid-only').checked;
 
                 p.results.forEach(r => {
@@ -487,19 +497,24 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (emails.length === 0) {
-                // Export valid person even if no email?
                 const row = [
-                    `"${p.name}"`, `"${p.title || ''}"`, `"${p.company || ''}"`, `"${p.employees || ''}"`, `"${p.industry || ''}"`, `"${p.location || ''}"`,
-                    `"${p.domain || ''}"`, `"${p.website || ''}"`, `"${p.linkedin || ''}"`, `"${p.companyLinkedin || ''}"`,
-                    `""`, `"${p.status}"`
+                    `"${csvEsc(p.name)}"`, `"${csvEsc(p.title)}"`, `"${csvEsc(p.company)}"`,
+                    `"${csvEsc(p.employees)}"`, `"${csvEsc(p.industry)}"`,
+                    `"${csvEsc(secIndustries)}"`, `"${csvEsc(keywords)}"`, `"${csvEsc(p.location)}"`,
+                    `"${csvEsc(p.domain)}"`, `"${csvEsc(p.website)}"`,
+                    `"${csvEsc(p.linkedin)}"`, `"${csvEsc(p.companyLinkedin)}"`,
+                    `""`, `"${csvEsc(p.status)}"`
                 ];
                 csvContent += row.join(",") + "\n";
             } else {
                 emails.forEach(e => {
                     const row = [
-                        `"${p.name}"`, `"${p.title || ''}"`, `"${p.company || ''}"`, `"${p.employees || ''}"`, `"${p.industry || ''}"`, `"${p.location || ''}"`,
-                        `"${p.domain || ''}"`, `"${p.website || ''}"`, `"${p.linkedin || ''}"`, `"${p.companyLinkedin || ''}"`,
-                        `"${e.email}"`, `"${e.status}"`
+                        `"${csvEsc(p.name)}"`, `"${csvEsc(p.title)}"`, `"${csvEsc(p.company)}"`,
+                        `"${csvEsc(p.employees)}"`, `"${csvEsc(p.industry)}"`,
+                        `"${csvEsc(secIndustries)}"`, `"${csvEsc(keywords)}"`, `"${csvEsc(p.location)}"`,
+                        `"${csvEsc(p.domain)}"`, `"${csvEsc(p.website)}"`,
+                        `"${csvEsc(p.linkedin)}"`, `"${csvEsc(p.companyLinkedin)}"`,
+                        `"${csvEsc(e.email)}"`, `"${csvEsc(e.status)}"`
                     ];
                     csvContent += row.join(",") + "\n";
                 });
@@ -627,6 +642,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 await StorageWrapper.overwriteGlobalProfiles(allProfiles);
                 applyFilters();
                 render();
+                updateFilterOptions(); // Bug 14: refresh dropdowns so deleted profile's values don't linger
             }
         }
     };
@@ -635,6 +651,48 @@ document.addEventListener('DOMContentLoaded', () => {
         navigator.clipboard.writeText(text);
         alert('Copied: ' + text);
     };
+
+    async function cleanLinkedInLinks() {
+        if (!confirm("This will scan all leads and remove/fix any LinkedIn URLs that are not personal profiles (missing /in/). Continue?")) {
+            return;
+        }
+
+        let fixCount = 0;
+        let moveCount = 0;
+
+        allProfiles.forEach(p => {
+            const hasLink = p.linkedin && p.linkedin.includes('linkedin.com');
+            const isPersonal = p.linkedin && p.linkedin.includes('linkedin.com/in/');
+
+            if (hasLink && !isPersonal) {
+                // If it's a company link and companyLinkedin is empty, move it there
+                if (!p.companyLinkedin && (p.linkedin.includes('/company/') || p.linkedin.includes('/school/'))) {
+                    p.companyLinkedin = p.linkedin;
+                    moveCount++;
+                }
+
+                // Clear the personal LinkedIn field since it's invalid/messed up
+                p.linkedin = "";
+                fixCount++;
+            }
+        });
+
+        if (fixCount === 0) {
+            alert("No invalid LinkedIn links found. Your data is clean! ✨");
+            return;
+        }
+
+        try {
+            // Save updated profiles
+            await StorageWrapper.overwriteGlobalProfiles(allProfiles);
+            applyFilters();
+            render();
+            alert(`✅ Cleanup Complete!\n\n- Fixed/Cleared: ${fixCount} invalid personal links\n- Moved to Company field: ${moveCount}\n\nExisting leads can now be "re-found" with correct links when you scrape them again on Apollo.`);
+        } catch (err) {
+            console.error("Cleanup failed:", err);
+            alert("Cleanup failed. See console for details.");
+        }
+    }
 
     // --- API Key Management (Settings) ---
     function initSettings() {

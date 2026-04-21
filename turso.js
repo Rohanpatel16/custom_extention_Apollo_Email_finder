@@ -39,11 +39,17 @@ const TursoSync = (() => {
     async function ensureSchema() {
         if (_schemaMigrated) return;
         // SQLite ignores ADD COLUMN if already exists only via try/catch;
-        // we send all 3 and swallow individual errors.
+        // we send all and swallow individual errors.
         const migrations = [
-            `ALTER TABLE profiles ADD COLUMN employees  TEXT DEFAULT ''`,
-            `ALTER TABLE profiles ADD COLUMN industry   TEXT DEFAULT ''`,
-            `ALTER TABLE profiles ADD COLUMN old_results TEXT DEFAULT '[]'`
+            `ALTER TABLE profiles ADD COLUMN employees          TEXT DEFAULT ''`,
+            `ALTER TABLE profiles ADD COLUMN industry           TEXT DEFAULT ''`,
+            `ALTER TABLE profiles ADD COLUMN old_results        TEXT DEFAULT '[]'`,
+            // New fields (API migration)
+            `ALTER TABLE profiles ADD COLUMN company_keywords   TEXT DEFAULT '[]'`,
+            `ALTER TABLE profiles ADD COLUMN secondary_industries TEXT DEFAULT '[]'`,
+            // Bug 10a: created_at for stable chronological sort
+            `ALTER TABLE profiles ADD COLUMN created_at         TEXT DEFAULT NULL`,
+            `ALTER TABLE profiles ADD COLUMN updated_at         TEXT DEFAULT NULL`
         ];
         for (const sql of migrations) {
             try {
@@ -75,8 +81,12 @@ const TursoSync = (() => {
                     sql: `INSERT OR REPLACE INTO profiles
                           (id, name, title, company, location, domain, website,
                            linkedin, company_linkedin, status, results,
-                           employees, industry, old_results, updated_at)
-                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+                           employees, industry, old_results,
+                           company_keywords, secondary_industries,
+                           created_at, updated_at)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                  COALESCE((SELECT created_at FROM profiles WHERE id = ?), datetime('now')),
+                                  datetime('now'))`,
                     args: [
                         textArg(p.id),
                         textArg(p.name),
@@ -91,7 +101,11 @@ const TursoSync = (() => {
                         textArg(JSON.stringify(p.results || [])),
                         textArg(p.employees || ''),
                         textArg(p.industry || ''),
-                        textArg(JSON.stringify(p.old_results || []))
+                        textArg(JSON.stringify(p.old_results || [])),
+                        textArg(JSON.stringify(p.companyKeywords || [])),
+                        textArg(JSON.stringify(p.secondaryIndustries || [])),
+                        // Bug 10b: second p.id for the COALESCE subquery (preserves original created_at)
+                        textArg(p.id)
                     ]
                 }
             }));
@@ -142,7 +156,8 @@ const TursoSync = (() => {
             {
                 type: 'execute',
                 stmt: {
-                    sql: 'SELECT * FROM profiles ORDER BY created_at DESC',
+                    // Bug 10c: ORDER BY updated_at — created_at was never set so it was always NULL
+                    sql: 'SELECT * FROM profiles ORDER BY updated_at DESC',
                     args: []
                 }
             },
@@ -162,12 +177,16 @@ const TursoSync = (() => {
             });
 
             // Parse stored JSON fields
-            try { obj.results     = JSON.parse(obj.results     || '[]'); } catch (_) { obj.results = []; }
-            try { obj.old_results = JSON.parse(obj.old_results || '[]'); } catch (_) { obj.old_results = []; }
+            try { obj.results              = JSON.parse(obj.results              || '[]'); } catch (_) { obj.results = []; }
+            try { obj.old_results          = JSON.parse(obj.old_results          || '[]'); } catch (_) { obj.old_results = []; }
+            try { obj.companyKeywords      = JSON.parse(obj.company_keywords     || '[]'); } catch (_) { obj.companyKeywords = []; }
+            try { obj.secondaryIndustries  = JSON.parse(obj.secondary_industries || '[]'); } catch (_) { obj.secondaryIndustries = []; }
 
             // Map snake_case → camelCase to match JS data model
             obj.companyLinkedin = obj.company_linkedin ?? '';
             delete obj.company_linkedin;
+            delete obj.company_keywords;
+            delete obj.secondary_industries;
 
             return obj;
         });
