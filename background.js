@@ -19,7 +19,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         handleCallApify(request.emails, request.apiKey)
             .then(results => sendResponse({ success: true, data: results }))
             .catch(error => sendResponse({ success: false, error: error.message }));
-        return true; // Keep message channel open for async response
+        return true;
+    }
+
+    if (request.action === "GET_APIFY_LIMITS") {
+        handleGetApifyLimits(request.apiKey)
+            .then(data => sendResponse({ success: true, data }))
+            .catch(error => sendResponse({ success: false, error: error.message }));
+        return true; // Keep channel open for async response
     }
 });
 
@@ -70,4 +77,16 @@ async function handleCallApify(emails, apiKey) {
     if (!itemsRes.ok) throw new Error("Failed to fetch results from dataset");
 
     return await itemsRes.json();
+}
+
+async function handleGetApifyLimits(apiKey) {
+    const res = await fetch(`https://api.apify.com/v2/users/me/limits?token=${apiKey}`);
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(JSON.stringify({
+            status: res.status,
+            message: err.error?.message || res.statusText
+        }));
+    }
+    return res.json();
 }

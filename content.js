@@ -61,11 +61,20 @@
         },
 
         async searchPeople(filters, page = 1, perPage = 30) {
-            return this.call('/api/v1/mixed_people/search', 'POST', {
+            const hash = window.location.hash;
+            let endpoint = '/api/v1/mixed_people/search';
+            let context = 'people-index-page';
+
+            if (hash.includes('/contacts')) {
+                endpoint = '/api/v1/contacts/search';
+                context = 'contacts-index-page';
+            }
+
+            return this.call(endpoint, 'POST', {
                 page,
                 per_page: perPage,
                 display_mode: 'explorer_mode',
-                context: 'people-index-page',
+                context: context,
                 finder_version: 2,
                 show_suggestions: false,
                 num_fetch_result: 1,
@@ -101,56 +110,24 @@
         const params = new URLSearchParams(qPart);
         const filters = {};
 
-        const seniorities = params.getAll('personSeniorities[]');
-        if (seniorities.length) filters.person_seniorities = seniorities;
+        for (const [key, value] of params.entries()) {
+            let isArray = key.endsWith('[]');
+            let cleanKey = isArray ? key.slice(0, -2) : key;
+            
+            let snakeKey = cleanKey.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
 
-        const locations = params.getAll('personLocations[]');
-        if (locations.length) filters.person_locations = locations;
-
-        const empRanges = params.getAll('organizationNumEmployeesRanges[]');
-        if (empRanges.length) filters.organization_num_employees_ranges = empRanges;
-
-        const industries = params.getAll('organizationIndustryTagIds[]');
-        if (industries.length) filters.organization_industry_tag_ids = industries;
-
-        const keywords = params.getAll('qOrganizationKeywordTags[]');
-        if (keywords.length) filters.q_organization_keyword_tags = keywords;
-
-        const inclFields = params.getAll('includedOrganizationKeywordFields[]');
-        if (inclFields.length) filters.included_organization_keyword_fields = inclFields;
-
-        const sortAsc = params.get('sortAscending');
-        if (sortAsc !== null) filters.sort_ascending = sortAsc === 'true';
-
-        const sortBy = params.get('sortByField');
-        if (sortBy) filters.sort_by_field = sortBy;
-
-        // CRITICAL: pass the exclusion list ID to the API so the deadlock breaker
-        // actually excludes companies from the search results, not just from Apollo's UI.
-        // Without this, our API calls ignore the exclusion and return the same companies.
-        const notOrgListId = params.get('qNotOrganizationSearchListId');
-        if (notOrgListId) {
-            filters.q_not_organization_search_list_id = notOrgListId;
-            console.log('[Filters] Exclusion list active:', notOrgListId);
+            if (isArray) {
+                if (!filters[snakeKey]) filters[snakeKey] = [];
+                filters[snakeKey].push(value);
+            } else {
+                if (value === 'true') filters[snakeKey] = true;
+                else if (value === 'false') filters[snakeKey] = false;
+                else filters[snakeKey] = value;
+            }
         }
-
-        // Person title filter (e.g. "CEO", "Founder")
-        const titles = params.getAll('personTitles[]');
-        if (titles.length) filters.person_titles = titles;
-
-        // Department / sub-department filter
-        const depts = params.getAll('personDepartmentOrSubdepartments[]');
-        if (depts.length) filters.person_department_or_subdepartments = depts;
-
-        // exist_fields — CRITICAL for "Organization domain = Known" filter.
-        // Without this, our API calls return people with NO website even when the
-        // user has added the domain filter in Apollo UI.
-        const existFields = params.getAll('existFields[]');
-        if (existFields.length) {
-            filters.exist_fields = existFields;
-            console.log('[Filters] exist_fields active:', existFields);
-        }
-
+        
+        if (filters.page !== undefined) delete filters.page;
+        
         return filters;
     }
 
@@ -520,15 +497,37 @@
     function updateKeyStatus(key) {
         const el = document.getElementById('av-key-status');
         if (!key) {
-            el.textContent = "Status: No Key";
-            el.style.color = "#6b7280";
+            el.textContent = 'Status: No Key';
+            el.style.color = '#6b7280';
             return;
         }
 
         const color = key.status === 'active' ? '#10b981' : '#ef4444';
-        el.textContent = `Status: ${key.status.toUpperCase()} ${key.renewDate ? '(Renew: ' + key.renewDate + ')' : ''}`;
+        el.textContent = `Status: ${key.status.toUpperCase()} — fetching balance…`;
         el.style.color = color;
+
+        // Fetch real balance from Apify in the background
+        chrome.runtime.sendMessage({ action: 'GET_APIFY_LIMITS', apiKey: key.key }, (response) => {
+            if (!el) return; // sidebar may have been closed
+            if (response?.success) {
+                const limits  = response.data.data.limits;
+                const current = response.data.data.current;
+                const used      = current.monthlyUsageUsd;
+                const max       = limits.maxMonthlyUsageUsd;
+                const remaining = Math.max(0, max - used);
+                const pct       = max > 0 ? Math.min(100, (used / max) * 100).toFixed(0) : 0;
+                const remColor  = pct >= 90 ? '#ef4444' : pct >= 70 ? '#f59e0b' : '#10b981';
+                el.textContent = `${key.status.toUpperCase()} • $${remaining.toFixed(2)} left (${pct}% used)${key.renewDate ? ' • Renew: ' + key.renewDate : ''}`;
+                el.style.color = remColor;
+            } else {
+                // Fallback to local estimate
+                const localBal = key.balance !== undefined ? parseFloat(key.balance).toFixed(2) : '?';
+                el.textContent = `${key.status.toUpperCase()} • ~$${localBal} (est.)${key.renewDate ? ' • Renew: ' + key.renewDate : ''}`;
+                el.style.color = color;
+            }
+        });
     }
+
 
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.action === "toggle_sidebar") {
@@ -671,16 +670,23 @@
      * Returns the highest employee count seen across all profiles in the current session.
      * Now reads directly from state.profiles (populated by API) instead of scanning the DOM.
      */
-    function getHighestEmployeeCount() {
+    /**
+     * Returns the highest employee count seen in profiles collected SINCE
+     * startIndex — i.e. only within the current 5-page batch.
+     * Passing startIndex prevents stale high values from earlier batches
+     * from falsely advancing the filter when the current batch is stuck.
+     */
+    function getHighestEmployeeCount(startIndex = 0) {
         const counts = state.profiles
+            .slice(startIndex)   // ← only current batch
             .map(p => parseInt(String(p.employees || '').replace(/,/g, '').replace(/\+/g, '').trim(), 10))
             .filter(n => !isNaN(n) && n > 0);
         if (counts.length > 0) {
             const max = Math.max(...counts);
-            console.log('[AutoScrape] Max employee count from session profiles:', max);
+            console.log(`[AutoScrape] Max employee count from batch profiles (idx ${startIndex}+):`, max);
             return max;
         }
-        console.warn('[AutoScrape] No employee counts in session profiles.');
+        console.warn('[AutoScrape] No employee counts in current batch profiles.');
         return null;
     }
 
@@ -776,6 +782,7 @@
             // Collect 5 pages silently, then verify once, then advance filter.
             while (state.autoScraping) {
                 let newProfilesInBatch = 0;
+                const batchStartIndex = state.profiles.length; // snapshot before this batch
                 while (state.autoScraping) {
                     const currentPage = getCurrentPageFromUrl();
                     setAutoScrapeStatus(`[Batch] Collecting page ${currentPage}/5… (Min: ${getCurrentMinFromUrl()})`);
@@ -789,7 +796,7 @@
 
                 if (!state.autoScraping) break;
 
-                const maxCount = getHighestEmployeeCount();
+                const maxCount = getHighestEmployeeCount(batchStartIndex); // only this batch
                 const currentMin = getCurrentMinFromUrl();
                 setAutoScrapeStatus(`[Batch] 5 pages done. Max: ${maxCount ?? '?'}. Verifying…`);
                 
@@ -845,6 +852,7 @@
             // Verify after EACH page, then go to next. After page 5, advance filter.
             while (state.autoScraping) {
                 let newProfilesInBatch = 0;
+                const batchStartIndex = state.profiles.length; // snapshot before this batch
                 while (state.autoScraping) {
                     const currentPage = getCurrentPageFromUrl();
                     setAutoScrapeStatus(`[Per-Page] Page ${currentPage}/5… (Min: ${getCurrentMinFromUrl()})`);
@@ -871,7 +879,7 @@
 
                 if (!state.autoScraping) break;
 
-                const maxCount = getHighestEmployeeCount();
+                const maxCount = getHighestEmployeeCount(batchStartIndex); // only this batch
                 const currentMin = getCurrentMinFromUrl();
 
                 if (newProfilesInBatch === 0) {
@@ -939,7 +947,8 @@
                 return 0;
             }
 
-            if (data.people && data.people.length > 0) break; // ✅ got results
+            const peopleList = data?.people || data?.contacts || [];
+            if (peopleList.length > 0) break; // ✅ got results
 
             if (attempt < MAX_EMPTY_RETRIES) {
                 console.warn(
@@ -953,7 +962,8 @@
             }
         }
 
-        if (!data || !data.people || data.people.length === 0) {
+        const finalPeopleList = data?.people || data?.contacts || [];
+        if (finalPeopleList.length === 0) {
             showToast('No results from API on this page (after 3 attempts).', 'neutral');
             return 0;
         }
@@ -961,7 +971,7 @@
 
         // ── Pass 1: load org snippets for all org IDs ──────────────────────
         const orgIds = [...new Set(
-            data.people.map(p => p.organization_id).filter(Boolean)
+            finalPeopleList.map(p => p.organization_id).filter(Boolean)
         )];
 
         let orgMap = {};
@@ -977,7 +987,7 @@
         // ── Pass 2: for people whose org still has no website, re-query ────
         // The search endpoint embeds a minimal org stub — the snippet endpoint
         // often has primary_domain populated even when website_url is null.
-        const noWebsiteOrgIds = data.people
+        const noWebsiteOrgIds = finalPeopleList
             .filter(p => {
                 const org = p.organization || {};
                 const snip = orgMap[p.organization_id] || {};
@@ -1021,7 +1031,7 @@
         const newProfiles = [];
         let newCount = 0;
 
-        for (const person of data.people) {
+        for (const person of finalPeopleList) {
             const orgSnippet = orgMap[person.organization_id] || null;
             const profile = mapPersonToProfile(person, orgSnippet);
             if (!profile) continue;

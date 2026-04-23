@@ -241,18 +241,34 @@
             <h3>⚙️ API Key Management</h3>
             <div class="modal-body">
                 <div class="av-input-group">
-                    <label style="display:block; margin-bottom:5px; font-weight:500;">Add New Key</label>
-                    <div style="display:flex; gap:10px;">
-                        <input type="text" id="new-key-token" placeholder="Apify API Token" class="av-input" style="flex:2;">
-                        <input type="text" id="new-key-label" placeholder="Label (e.g. Account 1)" class="av-input" style="flex:1;">
-                        <input type="date" id="new-key-date" title="Renew Date" class="av-input" style="width:130px;">
+                    <label style="display:block; margin-bottom:5px; font-weight:500;">Add / Edit Key</label>
+
+                    <!-- Row 1: Token + Verify -->
+                    <div style="display:flex; gap:8px; margin-bottom:8px;">
+                        <input type="text" id="new-key-token" placeholder="Apify API Token" class="av-input" style="flex:1;">
+                        <button id="verify-key-btn" type="button" class="btn btn-secondary" style="white-space:nowrap; font-size:13px;" title="Verify token and auto-fill account info">🔍 Verify</button>
                     </div>
-                    <button id="add-key-btn" class="btn btn-primary" style="margin-top:10px; width:100%;">+ Add Key</button>
+
+                    <!-- Row 2: Label + Date (date auto-filled after verify) -->
+                    <div style="display:flex; gap:8px; margin-bottom:8px;">
+                        <input type="text" id="new-key-label" placeholder="Label (e.g. Account 1)" class="av-input" style="flex:1;">
+                        <input type="date" id="new-key-date" title="Renew Date (auto-filled on Verify)" class="av-input" style="width:150px;">
+                    </div>
+
+                    <!-- Account info preview — shown after Verify -->
+                    <div id="key-verify-preview" style="display:none; padding:8px 12px; border-radius:6px; font-size:12px; margin-bottom:8px;"></div>
+
+                    <button id="add-key-btn" class="btn btn-primary" style="width:100%;">+ Add Key</button>
                 </div>
 
                 <hr style="margin: 20px 0; border:0; border-top:1px solid #eee;">
 
-                <label style="display:block; margin-bottom:10px; font-weight:500;">Your Keys</label>
+                <!-- "Your Keys" header + Refresh All -->
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <label style="font-weight:500; margin:0;">Your Keys</label>
+                    <button id="refresh-all-balances-btn" class="btn btn-secondary" style="font-size:12px; padding:4px 12px;" title="Re-fetch real balance from Apify for all keys">🔄 Refresh All</button>
+                </div>
+
                 <div id="keys-list" class="keys-list-container">
                     <!-- Keys injected here -->
                 </div>
