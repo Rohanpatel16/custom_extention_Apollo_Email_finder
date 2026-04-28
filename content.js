@@ -573,15 +573,18 @@
         if (state.profiles.length === 0) return ui.showToast("No data", "neutral");
         let csv = "Name,Title,Company,Location,Employees,Industry,Domain,Website,LinkedIn,Email,Status,Result\n";
         const esc = v => `"${String(v || '').replace(/"/g, '""')}"`;
-        
+        let rowCount = 0;
+
         state.profiles.forEach(p => {
             const base = `${esc(p.name)},${esc(p.title)},${esc(p.company)},${esc(p.location)},${esc(p.employees)},${esc(p.industry)},${esc(p.domain)},${esc(p.website)},${esc(p.linkedin)}`;
-            if (p.results?.length > 0) {
-                p.results.forEach(r => csv += `${base},${esc(r.email)},${esc(p.status)},${esc(r.result)}\n`);
-            } else {
-                csv += `${base},"",${esc(p.status)},""\n`;
+            const validEmails = (p.results || []).filter(r => r.result === 'ok');
+            if (validEmails.length > 0) {
+                validEmails.forEach(r => { csv += `${base},${esc(r.email)},${esc(p.status)},${esc(r.result)}\n`; rowCount++; });
             }
+            // Profiles with no valid email are skipped entirely
         });
+
+        if (rowCount === 0) return ui.showToast("No valid (ok) emails to export", "neutral");
 
         const blob = new Blob([csv], { type: 'text/csv' });
         const url = URL.createObjectURL(blob);
@@ -589,6 +592,7 @@
         a.href = url;
         a.download = 'apollo_leads.csv';
         a.click();
+        ui.showToast(`Exported ${rowCount} valid email${rowCount !== 1 ? 's' : ''}`, "success");
     }
 
     // -------------------------------------------------------------------------
