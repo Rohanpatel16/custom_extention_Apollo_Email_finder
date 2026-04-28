@@ -101,7 +101,14 @@ Prevents the same lead from being saved twice while correctly tracking job chang
 
 ## 🤝 Contributing
 
-Open an issue or submit a pull request. Key areas for contribution:
+Open an issue or submit a pull request. For detailed information on scripts, configuration, and how to contribute, please see the following guides:
+
+- [Contributing Guide](docs/CONTRIBUTING.md)
+- [Project Scripts](docs/SCRIPTS.md)
+- [Environment & Configuration](docs/ENV.md)
+- [Operations Runbook](docs/RUNBOOK.md)
+
+Key areas for contribution:
 - Additional email verification providers
 - Improved email pattern generation for non-Western name formats
 - Rate-limit handling for very large scrape sessions (10,000+ leads)

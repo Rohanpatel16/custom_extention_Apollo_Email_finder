@@ -71,6 +71,27 @@ window.ContentUI = (() => {
                                 <input type="radio" id="av-mode-perpage" name="av-scrape-mode" value="perpage" style="accent-color:#16a34a;">
                                 <span><b>Per Page</b> — verify after each page</span>
                             </label>
+                            <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                                <input type="radio" id="av-mode-bracket" name="av-scrape-mode" value="bracket" style="accent-color:#16a34a;">
+                                <span><b>Bracket</b> — sweep min→max in steps</span>
+                            </label>
+                            <div id="av-bracket-settings" style="display:none; margin-top:6px; padding:6px; background:#ecfdf5; border-radius:6px; border:1px solid #6ee7b7;">
+                                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:4px; margin-bottom:4px;">
+                                    <div>
+                                        <label style="font-size:10px; color:#374151; display:block; margin-bottom:2px; font-weight:600;">Min Emp</label>
+                                        <input type="number" id="av-bracket-min" class="av-input" value="1" min="1" style="width:100%; padding:3px 4px; font-size:12px;">
+                                    </div>
+                                    <div>
+                                        <label style="font-size:10px; color:#374151; display:block; margin-bottom:2px; font-weight:600;">Max Emp</label>
+                                        <input type="number" id="av-bracket-max" class="av-input" value="50" min="1" style="width:100%; padding:3px 4px; font-size:12px;">
+                                    </div>
+                                    <div>
+                                        <label style="font-size:10px; color:#374151; display:block; margin-bottom:2px; font-weight:600;">Step</label>
+                                        <input type="number" id="av-bracket-step" class="av-input" value="2" min="1" style="width:100%; padding:3px 4px; font-size:12px;">
+                                    </div>
+                                </div>
+                                <div id="av-bracket-progress" style="font-size:10px; color:#6b7280; margin-top:2px;">Set range above, then enable Auto-Scrape</div>
+                            </div>
                         </div>
                         <div id="av-autoscrape-status" style="margin-top:4px; font-size:11px; color:#6B7280; padding-left:2px;">Idle — enable to start</div>
                     </div>

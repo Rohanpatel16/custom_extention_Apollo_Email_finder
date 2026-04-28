@@ -29,12 +29,52 @@ window.ContentScraper = (() => {
         return filters;
     }
 
+    /**
+     * Parses the active employee count filter range from the Apollo URL hash.
+     * Apollo encodes ranges as "N," (open-ended, N and above) or "N,M" (bounded).
+     * Returns { min, max, active } where min/max are integers or null if not set.
+     */
+    function parseEmployeeFilterRange() {
+        const hash = decodeURIComponent(window.location.hash);
+        const qPart = hash.includes('?') ? hash.split('?')[1] : '';
+        const params = new URLSearchParams(qPart);
+        const ranges = params.getAll('organizationNumEmployeesRanges[]');
+
+        let min = null, max = null;
+        ranges.forEach(r => {
+            const parts = r.split(',');
+            const lo = parseInt((parts[0] || '').trim(), 10);
+            const hi = parseInt((parts[1] || '').trim(), 10);
+            if (!isNaN(lo)) min = (min === null) ? lo : Math.min(min, lo);
+            if (!isNaN(hi)) max = (max === null) ? hi : Math.max(max, hi);
+        });
+
+        return { min, max, active: min !== null || max !== null };
+    }
+
+    /**
+     * Returns true if the profile's employee count falls within the active filter range.
+     * Profiles with missing/unparseable employee counts are accepted (benefit of doubt).
+     * If no filter is active, all profiles are accepted.
+     */
+    function isWithinEmployeeFilter(profile, filterRange) {
+        if (!filterRange.active) return true;
+        const empStr = String(profile.employees || '').replace(/,/g, '').replace(/\+/g, '').trim();
+        const count = parseInt(empStr, 10);
+        if (isNaN(count) || count <= 0) return true; // unknown count — accept
+        if (filterRange.min !== null && count < filterRange.min) return false;
+        if (filterRange.max !== null && count > filterRange.max) return false;
+        return true;
+    }
+
     async function extractProfiles(silent = false) {
         if (!silent) ContentUI.showToast("Extracting via Apollo API...", "neutral");
 
         try {
             const currentPage = getCurrentPageFromUrl();
             const filters = parseApolloUrlFilters();
+            const filterRange = parseEmployeeFilterRange();
+            let skippedAnomalyCount = 0;
 
             // Apollo sometimes returns empty data right after filter changes. Retry 3x.
             let data = null;
@@ -104,6 +144,16 @@ window.ContentScraper = (() => {
                     (p.name === profile.name && p.domain === profile.domain)
                 );
                 if (inSession) continue;
+
+                // ── Filter Anomaly Guard ────────────────────────────────────────
+                // Apollo sometimes injects out-of-range results even on ascending
+                // sorts (e.g., a 6-emp company in a 1-emp filter). Skip them so
+                // they don't pollute the CRM or distort the auto-advance cursor.
+                if (!isWithinEmployeeFilter(profile, filterRange)) {
+                    skippedAnomalyCount++;
+                    console.warn(`[FilterGuard] Skipping "${profile.name}" — ${profile.employees} employees outside filter range (min:${filterRange.min}, max:${filterRange.max})`);
+                    continue;
+                }
 
                 // 3-Tier CRM Dedup
                 // matchTier tracks HOW the match was found — only Tier 1 (LinkedIn) is
@@ -177,6 +227,10 @@ window.ContentScraper = (() => {
                 }
             }
 
+            if (skippedAnomalyCount > 0 && !silent) {
+                ContentUI.showToast(`⚠️ Skipped ${skippedAnomalyCount} anomalous result${skippedAnomalyCount > 1 ? 's' : ''} (outside employee filter)`, 'warning');
+            }
+
             return newProfiles;
         } catch (err) {
             console.error('[Extract] failed:', err);
@@ -205,12 +259,48 @@ window.ContentScraper = (() => {
         return counts.length > 0 ? Math.max(...counts) : null;
     }
 
+    /**
+     * Like getHighestEmployeeCount but only considers profiles that are within
+     * the active Apollo employee filter range. This prevents anomalous out-of-range
+     * results from inflating the auto-advance cursor and causing gaps in coverage.
+     */
+    function getValidatedHighestEmployeeCount(startIndex = 0) {
+        const filterRange = parseEmployeeFilterRange();
+        const counts = ContentState.profiles
+            .slice(startIndex)
+            .filter(p => isWithinEmployeeFilter(p, filterRange))
+            .map(p => parseInt(String(p.employees || '').replace(/,/g, '').replace(/\+/g, '').trim(), 10))
+            .filter(n => !isNaN(n) && n > 0);
+        return counts.length > 0 ? Math.max(...counts) : null;
+    }
+
     function advanceEmployeeFilter(newMin) {
         let hash = window.location.hash;
         hash = hash.replace(
             /organizationNumEmployeesRanges\[\]=[^&]*/,
             `organizationNumEmployeesRanges[]=${encodeURIComponent(newMin + ',')}`
         );
+        hash = hash.replace(/page=\d+/, 'page=1');
+        window.location.hash = hash;
+    }
+
+    /**
+     * Sets the Apollo URL employee filter to a bounded range [min, max].
+     * Used by Bracket Scrape Mode. Apollo encodes this as "min,max".
+     */
+    function setBracketFilter(min, max) {
+        let hash = window.location.hash;
+        const encoded = encodeURIComponent(`${min},${max}`);
+        if (hash.includes('organizationNumEmployeesRanges[]')) {
+            hash = hash.replace(
+                /organizationNumEmployeesRanges\[\]=[^&]*/,
+                `organizationNumEmployeesRanges[]=${encoded}`
+            );
+        } else {
+            // No existing filter — append it after the ? separator
+            const sep = hash.includes('?') ? '&' : '?';
+            hash += `${sep}organizationNumEmployeesRanges[]=${encoded}`;
+        }
         hash = hash.replace(/page=\d+/, 'page=1');
         window.location.hash = hash;
     }
@@ -232,7 +322,9 @@ window.ContentScraper = (() => {
         getCurrentPageFromUrl,
         getCurrentMinFromUrl,
         getHighestEmployeeCount,
+        getValidatedHighestEmployeeCount,
         advanceEmployeeFilter,
+        setBracketFilter,
         clickNextPage
     };
 })();

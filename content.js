@@ -132,11 +132,26 @@
             else ui.setAutoScrapeStatus('Stopping...');
         });
 
-        // Auto-Scrape Mode radios
+        // Auto-Scrape Mode radios — also toggle bracket settings visibility
         document.querySelectorAll('input[name="av-scrape-mode"]').forEach(radio => {
             radio.addEventListener('change', (e) => {
                 state.autoScrapeMode = e.target.value;
+                const bracketSettings = document.getElementById('av-bracket-settings');
+                if (bracketSettings) {
+                    bracketSettings.style.display = e.target.value === 'bracket' ? 'block' : 'none';
+                }
             });
+        });
+
+        // Bracket input sync
+        document.getElementById('av-bracket-min')?.addEventListener('input', (e) => {
+            state.bracketMin = Math.max(1, parseInt(e.target.value, 10) || 1);
+        });
+        document.getElementById('av-bracket-max')?.addEventListener('input', (e) => {
+            state.bracketMax = Math.max(1, parseInt(e.target.value, 10) || 50);
+        });
+        document.getElementById('av-bracket-step')?.addEventListener('input', (e) => {
+            state.bracketStep = Math.max(1, parseInt(e.target.value, 10) || 2);
         });
 
         document.getElementById('av-show-valid-only').addEventListener('change', () => {
@@ -381,6 +396,76 @@
         return true;
     }
 
+    async function runBracketScrape() {
+        const wait = ms => new Promise(r => setTimeout(r, ms));
+        const globalMin = state.bracketMin || 1;
+        const globalMax = state.bracketMax || 50;
+        const step = state.bracketStep || 2;
+        const bracketProgress = document.getElementById('av-bracket-progress');
+
+        ui.showToast(`Bracket Scrape: ${globalMin}–${globalMax}, step ${step}`, 'success');
+
+        for (let lo = globalMin; lo <= globalMax && state.autoScraping; lo += step) {
+            const hi = Math.min(lo + step - 1, globalMax);
+
+            // Set bounded bracket filter and update UI
+            scraper.setBracketFilter(lo, hi);
+            if (bracketProgress) bracketProgress.textContent = `Current bracket: ${lo}–${hi}`;
+            await wait(state.SCRAPE_CONFIG.FILTER_WAIT_DELAY);
+
+            // Inner loop: scrape + optional deadlock within this bracket
+            let bracketDone = false;
+            while (!bracketDone && state.autoScraping) {
+                let newInBracket = 0;
+
+                // Scrape up to 5 pages for this bracket — verify after each page
+                while (state.autoScraping) {
+                    const currentPage = scraper.getCurrentPageFromUrl();
+                    ui.setAutoScrapeStatus(`[Bracket ${lo}–${hi}] Page ${currentPage}/5`);
+                    await wait(state.SCRAPE_CONFIG.PAGE_LOAD_DELAY);
+
+                    const extracted = await scraper.extractProfiles(true);
+                    newInBracket += (extracted?.length || 0);
+                    if (Array.isArray(extracted) && extracted.length > 0) {
+                        state.addProfiles(extracted);
+                        ui.renderList(state.profiles);
+
+                        // Verify immediately after each page (Per-Page behaviour)
+                        ui.setAutoScrapeStatus(`[Bracket ${lo}–${hi}] Verifying page ${currentPage}...`);
+                        const ok = await handleVerify(false);
+                        if (!ok) { state.autoScraping = false; break; }
+                    }
+
+                    if (currentPage >= 5) break;
+                    if (!(await scraper.clickNextPage())) break;
+                    await wait(state.SCRAPE_CONFIG.NAV_WAIT_DELAY);
+                }
+
+                if (!state.autoScraping) break;
+
+                // Deadlock check: if this bracket still had domains, try to break out
+                if (newInBracket > 0 && state.sessionDomains.size > 0) {
+                    const broke = await activateDeadlockBreaker();
+                    if (!broke) {
+                        bracketDone = true; // deadlock unresolved — move to next bracket
+                    } else {
+                        // Re-apply bracket filter (deadlock breaker rewrites the URL)
+                        scraper.setBracketFilter(lo, hi);
+                        await wait(state.SCRAPE_CONFIG.FILTER_WAIT_DELAY);
+                    }
+                } else {
+                    bracketDone = true; // bracket exhausted — move on
+                }
+            }
+
+            // Clear domain tracking before next bracket
+            state.sessionDomains.clear();
+        }
+
+        if (bracketProgress) bracketProgress.textContent = `Done — ${globalMin}–${globalMax} complete`;
+        ui.showToast(`Bracket Scrape complete (${globalMin}–${globalMax})`, 'success');
+    }
+
     async function runAutoScrape() {
         const hash = window.location.hash;
         if (!hash.includes('sortAscending=true') || !hash.includes('sortByField=organization_estimated_number_employees')) {
@@ -391,6 +476,15 @@
         }
 
         const mode = state.autoScrapeMode || 'batch';
+
+        // ── Bracket Mode: delegate to runBracketScrape ───────────────────────────
+        if (mode === 'bracket') {
+            await runBracketScrape();
+            document.getElementById('av-autoscrape-toggle').checked = false;
+            ui.setAutoScrapeStatus('Stopped');
+            return;
+        }
+
         ui.showToast(`Auto-Scrape started (${mode})`, 'success');
         const wait = ms => new Promise(r => setTimeout(r, ms));
 
@@ -431,19 +525,35 @@
             }
 
             if (newProfilesInBatch === 0) {
-                ui.showToast('No new profiles found. Filter may be too narrow.', 'warning');
-                state.autoScraping = false;
-                break;
+                // All results were deduplicated — likely resuming a previous session.
+                // Advance the filter by 1 past the current minimum instead of stopping.
+                const currentMinResume = scraper.getCurrentMinFromUrl();
+                const resumeNext = currentMinResume + 1;
+                console.log(`[AutoScrape] All results deduped at min=${currentMinResume} — resuming from ${resumeNext}`);
+                ui.setAutoScrapeStatus(`Resuming — advancing past ${currentMinResume}...`);
+                ui.showToast(`⏩ Resuming — skipping past employee count ${currentMinResume}`, 'neutral');
+                scraper.advanceEmployeeFilter(resumeNext);
+                await wait(state.SCRAPE_CONFIG.FILTER_WAIT_DELAY);
+                continue; // restart outer loop with new filter
             }
 
-            const maxEmp = scraper.getHighestEmployeeCount(batchStartIndex);
+            const maxEmp = scraper.getValidatedHighestEmployeeCount(batchStartIndex);
             const currentMin = scraper.getCurrentMinFromUrl();
             
             if (maxEmp !== null && maxEmp > currentMin) {
+                // Normal advance: highest scraped count becomes new minimum
                 ui.setAutoScrapeStatus(`Advancing filter to ${maxEmp}...`);
                 scraper.advanceEmployeeFilter(maxEmp);
                 await wait(state.SCRAPE_CONFIG.FILTER_WAIT_DELAY);
+            } else if (maxEmp !== null && maxEmp === currentMin) {
+                // Tie: all results share the filter minimum — step past it by 1
+                const nextMin = currentMin + 1;
+                ui.setAutoScrapeStatus(`Tie at ${currentMin} — stepping to ${nextMin}...`);
+                console.log(`[AutoScrape] Tie at ${currentMin}, advancing to ${nextMin}`);
+                scraper.advanceEmployeeFilter(nextMin);
+                await wait(state.SCRAPE_CONFIG.FILTER_WAIT_DELAY);
             } else {
+                // maxEmp is null — deadlock (no usable data from batch)
                 if (state.sessionDomains.size > 0) {
                     const broke = await activateDeadlockBreaker();
                     if (!broke) { state.autoScraping = false; break; }
