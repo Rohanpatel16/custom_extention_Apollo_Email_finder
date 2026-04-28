@@ -8,16 +8,24 @@
  */
 
 const TursoSync = (() => {
-    // ─── Config ───────────────────────────────────────────────────────────────
-    const DB_URL    = 'https://apollo-email-finder-rohanpatell.aws-ap-south-1.turso.io';
-    const AUTH_TOKEN = 'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3NzQzNTYxOTYsImlkIjoiMDE5ZDFmZGQtMmMwMS03ZTczLWIwODAtNzA5ZTFlZDBiMzEwIiwicmlkIjoiYjg0MTBjYmEtZjk1ZS00YzQ0LWE5NDAtZDY1MzU1NzU2MjE5In0.-5KzP0ei0UTWWtMNn4c6P1HipwGv2OwzQPruCfQ9NN4Rg-ctEYk33bm5SjYLLM5JbqI55ytTeMKflAFj3Z2_Cw';
-
     // ─── Core HTTP executor ───────────────────────────────────────────────────
     async function execute(requests) {
-        const res = await fetch(`${DB_URL}/v2/pipeline`, {
+        // Fetch config from storage on every execution to ensure we have latest
+        if (typeof StorageWrapper === 'undefined') {
+            throw new Error('[TursoSync] StorageWrapper not found');
+        }
+        const config = await StorageWrapper.getTursoConfig();
+        const { dbUrl, authToken } = config;
+
+        if (!dbUrl || !authToken) {
+            console.warn('[TursoSync] Missing DB_URL or AUTH_TOKEN in settings.');
+            throw new Error('Turso credentials not configured. Please set them in the Dashboard.');
+        }
+
+        const res = await fetch(`${dbUrl}/v2/pipeline`, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${AUTH_TOKEN}`,
+                'Authorization': `Bearer ${authToken}`,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({ requests })

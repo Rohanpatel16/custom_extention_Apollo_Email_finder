@@ -26,6 +26,10 @@
             "js": [
                 "turso.js",
                 "storage.js",
+                "content-state.js",
+                "content-api.js",
+                "content-ui.js",
+                "content-scraper.js",
                 "content.js"
             ],
             "css": [

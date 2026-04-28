@@ -370,9 +370,11 @@ a:hover {
 
 /* ── API Key list — scrollable when many keys are added ───────────────────── */
 .keys-list-container {
-    max-height: 340px;          /* ~5 keys visible */
+    max-height: 340px;
+    /* ~5 keys visible */
     overflow-y: auto;
-    padding-right: 4px;         /* room for scrollbar */
+    padding-right: 4px;
+    /* room for scrollbar */
     border-top: 1px solid #e5e7eb;
     padding-top: 10px;
     margin-top: 4px;
@@ -382,14 +384,17 @@ a:hover {
 .keys-list-container::-webkit-scrollbar {
     width: 6px;
 }
+
 .keys-list-container::-webkit-scrollbar-track {
     background: #f1f5f9;
     border-radius: 8px;
 }
+
 .keys-list-container::-webkit-scrollbar-thumb {
     background: #cbd5e1;
     border-radius: 8px;
 }
+
 .keys-list-container::-webkit-scrollbar-thumb:hover {
     background: #94a3b8;
 }
@@ -401,8 +406,10 @@ a:hover {
     display: flex;
     flex-direction: column;
 }
+
 #settings-modal .modal-body {
     flex: 1;
     overflow-y: auto;
-    min-height: 0;   /* critical — lets flex children shrink below content size */
+    min-height: 0;
+    /* critical — lets flex children shrink below content size */
 }

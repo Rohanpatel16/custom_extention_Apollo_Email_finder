@@ -28,6 +28,9 @@
                 <button class="nav-item" data-tab="failed">
                     <span class="icon">❌</span> Failed <span class="badge" id="count-failed">0</span>
                 </button>
+                <button class="nav-item" data-tab="jobChanged">
+                    <span class="icon">🔄</span> Job Changed <span class="badge" id="count-job-changed">0</span>
+                </button>
                 <button class="nav-item" id="legal-nav-btn">
                     <span class="icon">📋</span> Legal
                 </button>
@@ -272,6 +275,20 @@
                 <div id="keys-list" class="keys-list-container">
                     <!-- Keys injected here -->
                 </div>
+
+                <hr style="margin: 20px 0; border:0; border-top:1px solid #eee;">
+
+                <!-- Turso Cloud Settings -->
+                <div class="av-input-group">
+                    <label style="display:block; margin-bottom:5px; font-weight:500;">☁️ Turso Cloud Sync (Cloud Backup)</label>
+                    <p style="font-size: 11px; color: #6b7280; margin-bottom: 10px;">Enter your Turso database credentials to enable cloud synchronization and backups.</p>
+                    
+                    <div style="display:flex; flex-direction:column; gap:8px;">
+                        <input type="text" id="turso-db-url" placeholder="Turso DB URL (e.g. https://db-name-user.turso.io)" class="av-input" style="width:100%;">
+                        <input type="password" id="turso-auth-token" placeholder="Turso Auth Token" class="av-input" style="width:100%;">
+                        <button id="save-turso-btn" class="btn btn-primary" style="width:100%;">Save Cloud Settings</button>
+                    </div>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" id="close-settings-modal">Close</button>
@@ -281,6 +298,10 @@
 
     <script src="turso.js"></script>
     <script src="storage.js"></script>
+    <script src="dashboard-state.js"></script>
+    <script src="dashboard-ui.js"></script>
+    <script src="dashboard-api.js"></script>
+    <script src="dashboard-settings.js"></script>
     <script src="dashboard.js"></script>
 </body>
 

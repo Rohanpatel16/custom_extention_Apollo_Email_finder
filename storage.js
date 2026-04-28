@@ -12,7 +12,30 @@ const Storage = {
         SETTINGS: 'av_settings',
         API_TOKEN: 'apifyApiToken',      // Legacy Single Token
         API_KEYS: 'apifyApiKeys',        // New Multi-Key Array
-        BALANCE: 'av_balance'
+        BALANCE: 'av_balance',
+        TURSO_CONFIG: 'av_turso_config'  // Turso Cloud credentials
+    },
+
+    /**
+     * Get Turso Cloud Configuration
+     * @returns {Promise<Object>} { dbUrl, authToken }
+     */
+    async getTursoConfig() {
+        return new Promise((resolve) => {
+            chrome.storage.local.get([this.KEYS.TURSO_CONFIG], (result) => {
+                resolve(result[this.KEYS.TURSO_CONFIG] || { dbUrl: '', authToken: '' });
+            });
+        });
+    },
+
+    /**
+     * Save Turso Cloud Configuration
+     * @param {Object} config { dbUrl, authToken }
+     */
+    async saveTursoConfig(config) {
+        return new Promise((resolve) => {
+            chrome.storage.local.set({ [this.KEYS.TURSO_CONFIG]: config }, resolve);
+        });
     },
 
     /**
@@ -28,6 +51,21 @@ const Storage = {
     },
 
     /**
+     * Find a profile in the CRM by ID, LinkedIn URL, or Name+Domain
+     * @param {Object} query { id, linkedin_url, name, domain }
+     * @returns {Promise<Object|null>}
+     */
+    async getCachedProfile(query) {
+        const profiles = await this.getAllProfiles();
+        return profiles.find(p => {
+            if (query.id && p.id === query.id) return true;
+            if (query.linkedin_url && p.linkedin_url && p.linkedin_url === query.linkedin_url) return true;
+            if (query.name && query.domain && p.name === query.name && p.domain === query.domain) return true;
+            return false;
+        }) || null;
+    },
+
+    /**
      * Save profiles to Global CRM (merge/overwrite by ID)
      * @param {Array} newProfiles 
      * @returns {Promise<void>}
@@ -39,12 +77,17 @@ const Storage = {
         newProfiles.forEach(p => {
             // If exists, merge (prefer new data mostly, but keep flags if needed)
             if (existingMap.has(p.id)) {
-                // Merge logic: currently just overwrite with new state which is usually more up to date
-                // But we might want to preserve 'date_added' if we had it.
-                // For now, simple overwrite is fine as long as IDs match.
                 existingMap.set(p.id, { ...existingMap.get(p.id), ...p });
             } else {
                 existingMap.set(p.id, p);
+            }
+        });
+
+        // Fix 3: Auto-clear jobChanged once a valid email is verified for the lead.
+        // This way the badge disappears silently as soon as re-verification succeeds.
+        existingMap.forEach((p, id) => {
+            if (p.jobChanged && p.results && p.results.some(r => r.result === 'ok')) {
+                existingMap.set(id, { ...p, jobChanged: false });
             }
         });
 
