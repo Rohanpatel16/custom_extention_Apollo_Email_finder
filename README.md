@@ -1,114 +1,90 @@
 # Apollo Email Finder Extension 🚀
 
-A Chrome Extension that directly integrates with Apollo.io's internal API to extract professional profiles at scale, generate email permutations, verify them via Apify, and persist all leads to a dashboard CRM with Turso Cloud Sync — all without touching the DOM.
+A high-performance Chrome Extension (Manifest V3) that integrates directly with Apollo.io's internal API to extract professional profiles, generate email permutations, and verify them via Apify Million Verifier. Features a built-in CRM dashboard with local persistence and high-scale support.
 
 ---
 
 ## ✨ Features
 
 ### 🔌 API-First Architecture
-- **Direct Apollo API Integration** — replaces fragile DOM scraping with Apollo's internal `/api/v1` endpoints. Data is structured, reliable, and not affected by UI layout changes.
-- **Multi-Source Domain Recovery** — 4-source fallback chain (`org.website_url` → `snippet.website_url` → `org.primary_domain` → `snippet.primary_domain`) recovers domains that the search endpoint returns as `null`.
-- **Pass-2 Org Re-Query** — for profiles still missing a domain after pass-1, a secondary `loadOrganizations` call is made to recover them before they are dropped.
-- **Empty-Response Retry** — Apollo returns empty `200 OK` responses immediately after filter changes. The scraper retries up to 3× with a 3 s delay, preventing premature stops.
+- **Direct Apollo API Integration** — Bypasses fragile DOM scraping by using Apollo's internal `/api/v1` endpoints. Data is structured, reliable, and immune to UI changes.
+- **Multi-Source Domain Recovery** — Implements a 4-source fallback chain to recover missing company domains, ensuring high data enrichment rates.
+- **Pass-2 Org Re-Query** — Secondary organizations lookup to recover domains for profiles that lack them in the initial search results.
+- **Empty-Response Resilience** — Automatically detects and retries Apollo's empty `200 OK` responses often seen after filter shifts.
 
-### 🤖 Auto-Scrape Mode
-- **Batch** — collects 5 pages silently, then verifies in one shot and advances the employee filter.
-- **Per-Page** — verifies after each page for real-time results.
-- **Employee Filter Auto-Advance** — automatically increments `organizationNumEmployeesRanges` min to the highest seen employee count, cycling through all company sizes without user input.
+### 💾 Robust Data Persistence (Origin-Isolated)
+- **IndexedDB Proxy Architecture** — All profile data is managed via the Background Service Worker. This ensures that data is shared seamlessly between the Apollo sidebar (app.apollo.io origin) and the Extension Dashboard (extension origin), bypassing cross-origin storage limitations.
+- **High-Scale Performance** — Optimized for datasets of 15,000+ leads with virtualized rendering and efficient batch processing to prevent browser lag.
+- **Local-First CRM** — Built-in storage using IndexedDB for persistence, supporting large lead volumes without performance degradation.
 
-### 🔒 Deadlock Breaker
-- Detects when the employee filter is stuck (same max count across a full batch).
-- Registers all seen company domains as an Apollo exclusion list (`save_query`) and injects the list ID back into the URL so both the Apollo UI and our API calls respect the exclusion simultaneously.
-- **Cumulative exclusion** — each deadlock cycle builds on all previous ones. A second or third deadlock correctly carries over every previously excluded company, preventing them from re-appearing in results.
+### 🤖 Auto-Scrape & Deadlock Breaking
+- **Intelligent Batching** — Collects multiple pages silently before triggering verification to maximize throughput.
+- **Employee Filter Auto-Advance** — Automatically increments filters to cycle through company sizes, enabling fully autonomous extraction of large lists.
+- **Deadlock Breaker** — Detects when search filters are stuck and automatically builds/injects exclusion lists to push the scraper forward.
 
-### 🔍 3-Tier Smart Deduplication
-Prevents the same lead from being saved twice while correctly tracking job changes:
+### 🔍 Smart Deduplication & Job Tracking
+- **3-Tier Deduplication** — Matches by LinkedIn URL, Name + Domain, or Name-only fallback to prevent duplicates.
+- **Job Change Awareness** — Detects when a contact changes companies; automatically archives old verified emails and resets the profile for re-verification.
 
-| Tier | Match Key | Condition |
-|------|-----------|-----------|
-| 1 | LinkedIn URL | Always (globally unique) |
-| 2 | Name + Domain | Exact company match — separates "Rajesh Shah @ CompanyA" from "Rajesh Shah @ CompanyB" |
-| 3 | Name only | Last resort — only when **neither** the stored nor incoming profile has a LinkedIn URL |
-
-- **Job Change Detection** — if a person's domain changes, old verified emails are archived to `old_results` and the profile is reset for re-verification.
-
-### 🔑 API Key Management
-- Add multiple Apify tokens with labels, balances, and renewal dates.
-- **Auto-rotation** — when a key hits quota (402), the next active key is picked up automatically without stopping the scraper.
-- **Auto-renewal** — keys are reset to active on their configured monthly renewal date.
-
-### 📊 Dashboard CRM
-- Filter by industry, company, title, employee range, and verification status.
-- **CSV Export** — all leads with their verification results.
-- **Turso Cloud Sync** — real-time SQLite backup via Turso HTTP API. Pull or push between local and cloud at any time.
-- Per-profile delete synced to cloud.
+### 🔑 API Key & Cost Management
+- **Multi-Key Rotation** — Support for multiple Apify tokens with automatic failover when a key hits its quota.
+- **Balance Tracking** — Real-time tracking of Apify usage and limits directly within the dashboard.
 
 ---
 
 ## 🛠 Installation
 
-1. **Clone or download** this repository.
-2. Open Chrome → `chrome://extensions/`
-3. Enable **Developer mode** (top right).
-4. Click **Load unpacked** → select the extension folder.
+1. **Download** or clone this repository.
+2. Open Chrome and navigate to `chrome://extensions/`.
+3. Enable **Developer mode** (top right toggle).
+4. Click **Load unpacked** and select the extension folder.
 
 ---
 
 ## 📖 How to Use
 
-### Basic (Manual)
-1. Go to [Apollo Find People](https://app.apollo.io/#/people) and set your filters.
-2. Click the extension icon 🧩 to open the sidebar.
-3. Add your Apify API token via **⚙️ Manage Keys in Dashboard**.
-4. Click **Extract Profiles** → **Verify Selected**.
+### Setup
+1. Go to the **Dashboard** (click extension icon when not on Apollo).
+2. Navigate to **Settings** and add your **Apify API Key**.
+3. (Optional) Configure your **Turso** credentials if you wish to use cloud sync.
 
-### Auto-Scrape (Recommended for large lists)
-1. On Apollo, set:
-   - Sort by **Employees ↑ (Ascending)**
-   - Set `# Employees ≥ 1`
-   - Optionally add **Organization domain = Known** filter to guarantee every result has a website
-2. Enable **🤖 Auto-Scrape Mode** in the sidebar.
-3. Choose **Batch** (faster) or **Per-Page** (real-time) mode.
-4. The scraper will automatically:
-   - Extract 5 pages → verify → advance employee filter
-   - Detect and break deadlocks by building exclusion lists
-   - Stop when all results are exhausted
+### Scraping
+1. Open [Apollo Search](https://app.apollo.io/#/people).
+2. Click the extension icon to toggle the **Sidebar**.
+3. Choose your scraping mode (Manual or Auto-Scrape).
+4. Extracted leads will appear in the Sidebar and sync to your **Dashboard**.
 
 ---
 
-## 🗂 File Structure
+## 🗂 Project Structure
 
 | File | Role |
 |------|------|
-| `content.js` | Apollo API client, filter parser, profile mapper, auto-scrape loop, dedup, sidebar UI |
-| `background.js` | Apify run management (start → poll → fetch results) |
-| `storage.js` | `chrome.storage.local` wrapper + Turso sync triggers |
-| `turso.js` | Turso HTTP API client, schema migrations, upsert/delete/pull |
-| `dashboard.html/js/css` | CRM dashboard UI |
-| `sidebar.css` | Sidebar styles |
-| `manifest.json` | Extension manifest (MV3) |
+| `background.js` | Service worker managing IndexedDB proxy, Apify calls, and dashboard tabs. |
+| `indexed-db.js` | Core persistence layer using IndexedDB for high-volume storage. |
+| `content-scraper.js`| Apollo API extraction logic and profile mapping. |
+| `content-api.js`    | Wrapper for Apollo internal API calls. |
+| `content-ui.js`     | Sidebar UI and interaction logic. |
+| `dashboard.html`    | Full-page CRM dashboard for lead management. |
+| `storage.js`        | Legacy/Helper storage utilities. |
+| `turso.js`          | Turso Cloud Sync integration. |
+| `manifest.json`     | Extension configuration (MV3). |
 
 ---
 
 ## 🔒 Privacy & Security
 
-- All lead data is stored locally via `chrome.storage.local`.
-- Cloud backup uses your own private **Turso** database — no data is shared with third parties.
-- The extension communicates directly with `app.apollo.io` (same-origin, uses your existing session cookie) and `api.apify.com`.
+- **Local Storage** — Your lead data stays on your machine in the extension's private IndexedDB storage.
+- **Direct Communication** — The extension communicates directly with `app.apollo.io` (using your session) and `api.apify.com`.
+- **Private Cloud Sync** — If using Turso, data is synced to your personal private database.
 
 ---
 
 ## 🤝 Contributing
 
-Open an issue or submit a pull request. For detailed information on scripts, configuration, and how to contribute, please see the following guides:
+Contributions are welcome! Please focus on:
+- Additional email verification providers.
+- Supporting more complex Apollo filters.
+- UI/UX improvements for the dashboard.
 
-- [Contributing Guide](docs/CONTRIBUTING.md)
-- [Project Scripts](docs/SCRIPTS.md)
-- [Environment & Configuration](docs/ENV.md)
-- [Operations Runbook](docs/RUNBOOK.md)
-
-Key areas for contribution:
-- Additional email verification providers
-- Improved email pattern generation for non-Western name formats
-- Rate-limit handling for very large scrape sessions (10,000+ leads)
+To contribute, simply fork the repo and submit a Pull Request.
