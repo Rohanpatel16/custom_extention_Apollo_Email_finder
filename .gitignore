@@ -1,0 +1,9 @@
+node_modules/
+.agent/
+playwright-report/
+test-results/
+scratch/
+newsearchwithfilter.har
+apollo_requests.txt
+*.log
+.DS_Store

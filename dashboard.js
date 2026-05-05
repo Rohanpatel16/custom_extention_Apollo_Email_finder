@@ -2,6 +2,12 @@
  * dashboard.js
  * Main entry point for the Apollo CRM Dashboard.
  * Orchestrates initialization and event routing to specialized modules.
+ *
+ * Performance notes (15k+ leads):
+ * - Poll interval increased from 5s → 30s to avoid unnecessary full reloads.
+ * - A _loading guard prevents concurrent loadData() calls from stacking up.
+ * - populateFilterOptions() is called from DashboardState.loadData() lazily
+ *   via requestIdleCallback, so we don't call it again from here unless needed.
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -10,8 +16,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 2. Initial Data Load
     await DashboardState.loadData();
-    DashboardUI.populateFilterOptions();
     DashboardUI.render();
+
+    // Filter options are now populated lazily by DashboardState.loadData()
+    // via requestIdleCallback. No need to call populateFilterOptions() here.
 
     // 3. Global Event Listeners
     setupTabListeners();
@@ -22,19 +30,55 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupStorageListener();
 });
 
+/**
+ * Poll-based storage listener.
+ * Detects when the scraper adds new profiles and refreshes the dashboard.
+ *
+ * Performance safeguards:
+ * - Polls every 30s (not 5s) to reduce background work.
+ * - Uses a _loading flag to prevent concurrent reloads from stacking.
+ * - Only calls populateFilterOptions() if the lead count changed significantly.
+ */
 function setupStorageListener() {
-    // Fix 3: Debounce storage events so rapid scraping writes don't freeze the tab.
-    // 500 ms is imperceptible to the user but collapses bursts into a single refresh.
-    let storageDebounce;
-    chrome.storage.onChanged.addListener(async (changes, area) => {
-        if (area === 'local' && changes.av_profiles) {
-            clearTimeout(storageDebounce);
-            storageDebounce = setTimeout(async () => {
-                console.log('[Dashboard] Storage changed, refreshing...');
+    let lastKnownCount = DashboardState.allProfiles.length;
+    let _loading = false;
+
+    setInterval(async () => {
+        if (_loading) return; // prevent concurrent reloads
+
+        try {
+            await ProfileDB.open();
+            const currentCount = await ProfileDB.count();
+
+            if (currentCount !== lastKnownCount) {
+                _loading = true;
+                const oldCount = lastKnownCount;
+                lastKnownCount = currentCount;
+
+                console.log(`[Dashboard] IndexedDB changed (${oldCount} → ${currentCount}), refreshing…`);
+
                 await DashboardState.loadData();
                 DashboardUI.render();
-                DashboardUI.populateFilterOptions();
-            }, 500);
+
+                // Only rebuild filter options if the count changed significantly
+                // (small changes like 1-2 leads rarely add new filter categories)
+                if (Math.abs(currentCount - oldCount) >= 5) {
+                    DashboardUI.populateFilterOptions();
+                }
+
+                lastKnownCount = DashboardState.allProfiles.length;
+                _loading = false;
+            }
+        } catch (err) {
+            console.warn('[Dashboard] Poll check failed:', err);
+            _loading = false;
+        }
+    }, 30000); // 30s interval — was 5s
+
+    // Keep chrome.storage listener for session/settings changes
+    chrome.storage.onChanged.addListener(async (changes, area) => {
+        if (area === 'local' && (changes.av_sidebar_session || changes.av_settings)) {
+            console.log('[Dashboard] Settings/session changed');
         }
     });
 }
@@ -55,9 +99,7 @@ function setupTabListeners() {
 }
 
 function setupFilterListeners() {
-    // Search
-    // Fix 1: Debounce so applyFilters()+render() fire only after 250 ms of inactivity.
-    // Eliminates a full DOM rebuild on every single keystroke.
+    // Search — debounced to avoid full DOM rebuild on every keystroke
     let searchDebounce;
     document.getElementById('global-search').addEventListener('input', (e) => {
         clearTimeout(searchDebounce);
@@ -69,7 +111,9 @@ function setupFilterListeners() {
         }, 250);
     });
 
-    // Dropdowns
+    // Dropdown filters — these are now set up by DashboardUI.populateFilterOptions()
+    // which calls attachFilterListener() internally when it creates/swaps elements.
+    // We still set them up here for the initial <select> elements before they get swapped.
     ['job', 'company', 'location', 'industry'].forEach(field => {
         const el = document.getElementById(`filter-${field}`);
         if (el) {

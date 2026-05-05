@@ -1,6 +1,10 @@
 /**
  * dashboard-api.js
  * Handles data operations like sync, import, export, and deletion.
+ *
+ * Performance notes (15k+ leads):
+ * - deleteProfile() uses ProfileDB.deleteById() for single-record delete
+ *   instead of rewriting all 15k profiles via overwriteGlobalProfiles().
  */
 
 window.DashboardAPI = (() => {
@@ -35,12 +39,37 @@ window.DashboardAPI = (() => {
         }
     }
 
+    /**
+     * Delete a single profile by ID.
+     * Uses direct IndexedDB single-record delete instead of rewriting the entire dataset.
+     * This is ~1000x faster with 15k leads (deletes 1 row vs rewriting 14999).
+     */
     async function deleteProfile(id) {
         if (confirm("Delete this profile?")) {
             const index = DashboardState.allProfiles.findIndex(p => p.id === id);
             if (index > -1) {
+                // Remove from in-memory arrays
                 DashboardState.allProfiles.splice(index, 1);
-                await StorageWrapper.overwriteGlobalProfiles(DashboardState.allProfiles);
+
+                // Delete single record from IndexedDB (fast!)
+                try {
+                    await ProfileDB.open();
+                    await ProfileDB.deleteById(id);
+                } catch (err) {
+                    console.error('[Dashboard] Failed to delete from IndexedDB:', err);
+                    // Fallback: full rewrite if single delete fails
+                    await StorageWrapper.overwriteGlobalProfiles(DashboardState.allProfiles);
+                }
+
+                // Turso cloud sync: delete remotely (fire-and-forget)
+                if (typeof TursoSync !== 'undefined' && typeof TursoSync.deleteProfile === 'function') {
+                    TursoSync.deleteProfile(id).catch(err =>
+                        console.warn('[TursoSync] remote delete failed:', err)
+                    );
+                }
+
+                // Refresh in-memory state (lightweight — uses the setter which rebuilds index/counts)
+                DashboardState.allProfiles = DashboardState.allProfiles;
                 DashboardState.applyFilters();
                 DashboardUI.render();
                 DashboardUI.populateFilterOptions();

@@ -1,20 +1,110 @@
 /**
  * storage.js
- * Wrapper for chrome.storage.local to handle CRM data (Global) and Sidebar Session (View)
- * Also syncs profile data to Turso cloud (fire-and-forget) via TursoSync.
+ * Wrapper for CRM data (profiles via IndexedDB) and settings (chrome.storage.local).
+ *
+ * Profile data is stored in IndexedDB via ProfileDB for performance at scale.
+ * Settings, API keys, sidebar session, and Turso config remain in chrome.storage.local
+ * because they are small and benefit from the simple key-value model.
+ *
+ * On first access, any legacy profile data sitting in chrome.storage.local
+ * ("av_profiles") is transparently migrated into IndexedDB and the old key is removed.
  */
 
+// ─── Context detection ──────────────────────────────────────────────────
+// Content scripts run on app.apollo.io, extension pages on chrome-extension://.
+// IndexedDB is origin-scoped, so content scripts must proxy profile operations
+// through the background service worker (which shares the extension origin).
+const _isExtensionPage = (typeof chrome !== 'undefined' && chrome.runtime?.getURL
+    && location.href.startsWith(chrome.runtime.getURL('')));
+
+/**
+ * Helper: send a message to the background and return the response.
+ * @param {Object} msg
+ * @returns {Promise<Object>}
+ */
+function _bgMessage(msg) {
+    return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(msg, (response) => {
+            if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message));
+            } else {
+                resolve(response || {});
+            }
+        });
+    });
+}
+
 const Storage = {
-    // Keys
+    // Keys — only non-profile data stays in chrome.storage.local
     KEYS: {
-        PROFILES: 'av_profiles',         // Global Persistent CRM
+        PROFILES: 'av_profiles',         // Legacy — checked for migration only
         SESSION: 'av_sidebar_session',   // Current Sidebar View
         SETTINGS: 'av_settings',
         API_TOKEN: 'apifyApiToken',      // Legacy Single Token
         API_KEYS: 'apifyApiKeys',        // New Multi-Key Array
         BALANCE: 'av_balance',
-        TURSO_CONFIG: 'av_turso_config'  // Turso Cloud credentials
+        TURSO_CONFIG: 'av_turso_config', // Turso Cloud credentials
+        IDB_MIGRATED: 'av_idb_migrated'  // Flag: migration complete
     },
+
+    /** @type {boolean} tracks whether migration has been checked this session */
+    _migrationChecked: false,
+
+    // ─── Migration: chrome.storage → IndexedDB (one-time) ─────────────────
+
+    /**
+     * Checks for legacy av_profiles in chrome.storage.local and migrates
+     * them into IndexedDB. Idempotent — safe to call multiple times.
+     * @returns {Promise<void>}
+     */
+    async _ensureMigrated() {
+        if (this._migrationChecked) return;
+
+        // Quick check: has migration already completed?
+        const flags = await new Promise(resolve =>
+            chrome.storage.local.get([this.KEYS.IDB_MIGRATED], resolve)
+        );
+        if (flags[this.KEYS.IDB_MIGRATED]) {
+            this._migrationChecked = true;
+            return;
+        }
+
+        // Check for legacy data
+        const legacy = await new Promise(resolve =>
+            chrome.storage.local.get([this.KEYS.PROFILES], resolve)
+        );
+        const legacyProfiles = legacy[this.KEYS.PROFILES];
+
+        if (Array.isArray(legacyProfiles) && legacyProfiles.length > 0) {
+            console.log(`[Storage] Migrating ${legacyProfiles.length} profiles from chrome.storage → IndexedDB…`);
+            try {
+                await ProfileDB.open();
+                await ProfileDB.upsertMany(legacyProfiles);
+                // Remove legacy key + set migrated flag
+                await new Promise(resolve =>
+                    chrome.storage.local.remove(this.KEYS.PROFILES, resolve)
+                );
+                await new Promise(resolve =>
+                    chrome.storage.local.set({ [this.KEYS.IDB_MIGRATED]: true }, resolve)
+                );
+                console.log(`[Storage] Migration complete — ${legacyProfiles.length} profiles moved to IndexedDB.`);
+            } catch (err) {
+                console.error('[Storage] Migration failed — will retry next time:', err);
+                // Don't set the flag so it retries on next load
+                this._migrationChecked = true;
+                return;
+            }
+        } else {
+            // No legacy data — mark as migrated so we don't check again
+            await new Promise(resolve =>
+                chrome.storage.local.set({ [this.KEYS.IDB_MIGRATED]: true }, resolve)
+            );
+        }
+
+        this._migrationChecked = true;
+    },
+
+    // ─── Profile Operations (IndexedDB) ───────────────────────────────────
 
     /**
      * Get Turso Cloud Configuration
@@ -39,71 +129,109 @@ const Storage = {
     },
 
     /**
-     * Get all profiles from Global CRM
+     * Get all profiles from Global CRM (IndexedDB)
      * @returns {Promise<Array>}
      */
     async getAllProfiles() {
-        return new Promise((resolve) => {
-            chrome.storage.local.get([this.KEYS.PROFILES], (result) => {
-                resolve(result[this.KEYS.PROFILES] || []);
-            });
-        });
+        if (!_isExtensionPage) {
+            // Content script → ask background (extension-origin IndexedDB)
+            const resp = await _bgMessage({ action: 'GET_ALL_PROFILES' });
+            return resp.profiles || [];
+        }
+        // Extension page (dashboard) → direct IndexedDB access
+        await this._ensureMigrated();
+        await ProfileDB.open();
+        return ProfileDB.getAll();
     },
 
     /**
      * Find a profile in the CRM by ID, LinkedIn URL, or Name+Domain
+     * Uses indexed lookups — O(1) instead of O(n) array scan.
      * @param {Object} query { id, linkedin_url, name, domain }
      * @returns {Promise<Object|null>}
      */
     async getCachedProfile(query) {
-        const profiles = await this.getAllProfiles();
-        return profiles.find(p => {
-            if (query.id && p.id === query.id) return true;
-            if (query.linkedin_url && p.linkedin_url && p.linkedin_url === query.linkedin_url) return true;
-            if (query.name && query.domain && p.name === query.name && p.domain === query.domain) return true;
-            return false;
-        }) || null;
+        if (!_isExtensionPage) {
+            // Content script → ask background
+            const resp = await _bgMessage({ action: 'GET_CACHED_PROFILE', query });
+            return resp.profile || null;
+        }
+        // Extension page → direct IndexedDB
+        await this._ensureMigrated();
+        await ProfileDB.open();
+
+        if (query.id) {
+            const byId = await ProfileDB.getById(query.id);
+            if (byId) return byId;
+        }
+        if (query.linkedin_url) {
+            const byLi = await ProfileDB.getByLinkedin(query.linkedin_url);
+            if (byLi) return byLi;
+        }
+        if (query.name && query.domain) {
+            const byND = await ProfileDB.getByNameDomain(query.name, query.domain);
+            if (byND) return byND;
+        }
+        return null;
     },
 
     /**
      * Save profiles to Global CRM (merge/overwrite by ID)
+     * Preserves the existing merge logic: read existing, merge, write back.
      * @param {Array} newProfiles 
      * @returns {Promise<void>}
      */
     async saveAllProfiles(newProfiles) {
-        const existing = await this.getAllProfiles();
-        const existingMap = new Map(existing.map(p => [p.id, p]));
+        if (!_isExtensionPage) {
+            // Content script → proxy merge+save through background
+            await _bgMessage({ action: 'SAVE_PROFILES', profiles: newProfiles });
 
-        newProfiles.forEach(p => {
-            // If exists, merge (prefer new data mostly, but keep flags if needed)
-            if (existingMap.has(p.id)) {
-                existingMap.set(p.id, { ...existingMap.get(p.id), ...p });
-            } else {
-                existingMap.set(p.id, p);
+            // 🔵 Turso cloud sync (fire-and-forget) — turso.js is loaded in content scripts
+            if (typeof TursoSync !== 'undefined') {
+                const validIds = newProfiles.filter(p => p.id);
+                TursoSync.upsertProfiles(validIds).catch(err =>
+                    console.warn('[TursoSync] upsert failed:', err)
+                );
             }
-        });
+            return;
+        }
 
-        // Fix 3: Auto-clear jobChanged once a valid email is verified for the lead.
-        // This way the badge disappears silently as soon as re-verification succeeds.
-        existingMap.forEach((p, id) => {
-            if (p.jobChanged && p.results && p.results.some(r => r.result === 'ok')) {
-                existingMap.set(id, { ...p, jobChanged: false });
+        // Extension page (dashboard) → direct IndexedDB access
+        await this._ensureMigrated();
+        await ProfileDB.open();
+
+        // Build a map of existing profiles that need merging
+        const existingMap = new Map();
+        for (const p of newProfiles) {
+            if (!p.id) continue;
+            const existing = await ProfileDB.getById(p.id);
+            if (existing) {
+                existingMap.set(p.id, existing);
             }
-        });
+        }
 
-        const merged = Array.from(existingMap.values());
+        // Merge logic (same as original)
+        const toWrite = newProfiles.map(p => {
+            if (!p.id) return p;
+            const existing = existingMap.get(p.id);
+            let merged = existing ? { ...existing, ...p } : p;
 
-        return new Promise((resolve) => {
-            chrome.storage.local.set({ [this.KEYS.PROFILES]: merged }, () => {
-                resolve();
-                // 🔵 Turso cloud sync (fire-and-forget)
-                if (typeof TursoSync !== 'undefined') {
-                    TursoSync.upsertProfiles(merged).catch(err =>
-                        console.warn('[TursoSync] upsert failed:', err)
-                    );
-                }
-            });
-        });
+            // Auto-clear jobChanged once a valid email is verified
+            if (merged.jobChanged && merged.results && merged.results.some(r => r.result === 'ok')) {
+                merged = { ...merged, jobChanged: false };
+            }
+
+            return merged;
+        }).filter(p => p.id); // skip any without IDs
+
+        await ProfileDB.upsertMany(toWrite);
+
+        // 🔵 Turso cloud sync (fire-and-forget)
+        if (typeof TursoSync !== 'undefined') {
+            TursoSync.upsertProfiles(toWrite).catch(err =>
+                console.warn('[TursoSync] upsert failed:', err)
+            );
+        }
     },
 
     /**
@@ -111,26 +239,40 @@ const Storage = {
      * @param {Array} profiles 
      */
     async overwriteGlobalProfiles(profiles) {
-        return new Promise((resolve) => {
-            chrome.storage.local.set({ [this.KEYS.PROFILES]: profiles }, () => {
-                resolve();
-                // 🔵 Turso cloud sync: wipe + re-insert remaining (handles deletions)
-                if (typeof TursoSync !== 'undefined') {
-                    TursoSync.deleteAllProfiles()
-                        .then(() => {
-                            // Bug 9: skip upsert when there's nothing to insert (avoids a pointless round-trip)
-                            if (profiles.length > 0) {
-                                return TursoSync.upsertProfiles(profiles);
-                            }
-                            console.log('[TursoSync] All profiles cleared — cloud is now empty.');
-                        })
-                        .catch(err => {
-                            // Bug 9: elevated from warn to error — Turso may be empty while local isn't
-                            console.error('[TursoSync] overwrite sync failed — cloud may be out of sync:', err);
-                        });
-                }
-            });
-        });
+        if (!_isExtensionPage) {
+            // Content script → proxy through background
+            await _bgMessage({ action: 'OVERWRITE_PROFILES', profiles });
+
+            if (typeof TursoSync !== 'undefined') {
+                TursoSync.deleteAllProfiles()
+                    .then(() => profiles.length > 0 ? TursoSync.upsertProfiles(profiles) : null)
+                    .catch(err => console.error('[TursoSync] overwrite sync failed:', err));
+            }
+            return;
+        }
+
+        // Extension page → direct IndexedDB
+        await this._ensureMigrated();
+        await ProfileDB.open();
+
+        await ProfileDB.deleteAll();
+        if (profiles.length > 0) {
+            await ProfileDB.upsertMany(profiles);
+        }
+
+        // 🔵 Turso cloud sync: wipe + re-insert remaining (handles deletions)
+        if (typeof TursoSync !== 'undefined') {
+            TursoSync.deleteAllProfiles()
+                .then(() => {
+                    if (profiles.length > 0) {
+                        return TursoSync.upsertProfiles(profiles);
+                    }
+                    console.log('[TursoSync] All profiles cleared — cloud is now empty.');
+                })
+                .catch(err => {
+                    console.error('[TursoSync] overwrite sync failed — cloud may be out of sync:', err);
+                });
+        }
     },
 
     /**
@@ -168,18 +310,25 @@ const Storage = {
      * Clear Global CRM (Dangerous)
      */
     async clearAllProfiles() {
-        return new Promise((resolve) => {
-            chrome.storage.local.remove(this.KEYS.PROFILES, () => {
-                resolve();
-                // 🔵 Turso cloud sync: WE NO LONGER DELETE FROM CLOUD
-                // User wants to keep cloud data as a permanent record.
-                console.log('[Storage] Local profiles cleared. Cloud data preserved.');
-            });
-        });
+        if (!_isExtensionPage) {
+            // Content script → proxy through background
+            await _bgMessage({ action: 'CLEAR_PROFILES' });
+            console.log('[Storage] Local profiles cleared via background. Cloud data preserved.');
+            return;
+        }
+
+        // Extension page → direct IndexedDB
+        await this._ensureMigrated();
+        await ProfileDB.open();
+        await ProfileDB.deleteAll();
+
+        // 🔵 Turso cloud sync: WE NO LONGER DELETE FROM CLOUD
+        // User wants to keep cloud data as a permanent record.
+        console.log('[Storage] Local profiles cleared. Cloud data preserved.');
     },
 
     /**
-     * Pull ALL profiles from Turso cloud into local storage.
+     * Pull ALL profiles from Turso cloud into local storage (IndexedDB).
      * Used by the "Sync from Cloud" button in the dashboard.
      * @returns {Promise<Array>} the profiles pulled
      */
@@ -188,11 +337,13 @@ const Storage = {
             console.warn('[TursoSync] TursoSync not available');
             return [];
         }
+        await this._ensureMigrated();
+        await ProfileDB.open();
+
         const profiles = await TursoSync.getAllProfiles();
         if (profiles.length > 0) {
-            await new Promise(resolve =>
-                chrome.storage.local.set({ [this.KEYS.PROFILES]: profiles }, resolve)
-            );
+            await ProfileDB.deleteAll();
+            await ProfileDB.upsertMany(profiles);
         }
         return profiles;
     },
@@ -260,9 +411,6 @@ const Storage = {
                             k.balance = 5.00; // Reset balance on renewal
 
                             // Increment Month
-                            // Careful with end of month overflow (e.g. Jan 31 -> Feb 28)
-                            // Ideally user wants "same date" so 18th.
-                            // Simple increment:
                             renew.setMonth(renew.getMonth() + 1);
 
                             // Save new date
@@ -297,9 +445,6 @@ const Storage = {
      */
     async getActiveKey() {
         const keys = await this.getApiKeys();
-        // Check for renewal (simple logic: if renewDate passed, reset status?)
-        // Let's keep it simple: just return first 'active' key.
-        // User manually resets status or we auto-reset if logic dictates.
         return keys.find(k => k.status === 'active') || null;
     },
 

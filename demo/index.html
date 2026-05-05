@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apollo UI/UX Demo - Advanced</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="theme.css">
+    <link rel="stylesheet" href="dashboard.css">
+    <link rel="stylesheet" href="sidebar.css">
+</head>
+<body>
+    <div class="bg-mesh"></div>
+
+    <div class="app">
+        <!-- Static Left Navigation Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <div class="sidebar-logo">🚀</div>
+                <div>
+                    <div class="sidebar-name">Apollo CRM</div>
+                    <div class="sidebar-tagline">Pro Verifier</div>
+                </div>
+            </div>
+            
+            <div class="credits-pill">
+                <div class="credits-dot"></div>
+                <div>
+                    <div class="credits-label">API Balance</div>
+                    <div class="credits-value">$14.50</div>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <div class="nav-section-label">Database</div>
+                <button class="nav-item active">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                    All Leads <span class="nav-count">1,248</span>
+                </button>
+                <button class="nav-item">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                    Verified <span class="nav-count">942</span>
+                </button>
+                <button class="nav-item">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
+                    Failed <span class="nav-count">306</span>
+                </button>
+                
+                <div class="nav-section-label" style="margin-top: 15px;">Workflows</div>
+                <button class="nav-item">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+                    Campaigns
+                </button>
+                <button class="nav-item">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                    Analytics
+                </button>
+
+                <div class="nav-section-label" style="margin-top: 15px;">Tools</div>
+                <button class="nav-item">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    Export Data
+                </button>
+                <button class="nav-item">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                    Clean Links
+                </button>
+                <button class="nav-item">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                    Integrations
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <button class="nav-item" onclick="document.getElementById('demo-sidebar').classList.add('open')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                    Settings Panel
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main">
+            <!-- Topbar -->
+            <header class="topbar">
+                <div class="search-wrap">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <input type="text" class="input" placeholder="Search leads by name, company, job title, or keywords...">
+                </div>
+                <div class="topbar-actions">
+                    <button class="btn btn-secondary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 1 0 2.1-5.9L2 9"></path></svg> Sync Cloud</button>
+                    <button class="btn btn-primary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg> Export</button>
+                </div>
+            </header>
+
+            <!-- KPI Stats -->
+            <div class="stats-row">
+                <div class="stat-card">
+                    <div class="stat-card-row">
+                        <div>
+                            <div class="stat-label">Total Leads</div>
+                            <div class="stat-value">1,248</div>
+                        </div>
+                        <div class="stat-icon purple">👥</div>
+                    </div>
+                    <div class="stat-delta">↑ 12% this week</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-row">
+                        <div>
+                            <div class="stat-label">Verified Emails</div>
+                            <div class="stat-value">942</div>
+                        </div>
+                        <div class="stat-icon green">✅</div>
+                    </div>
+                    <div class="stat-delta">75% valid rate</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-row">
+                        <div>
+                            <div class="stat-label">Scraped Today</div>
+                            <div class="stat-value">156</div>
+                        </div>
+                        <div class="stat-icon cyan">⚡</div>
+                    </div>
+                    <div class="stat-delta">Active now</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-row">
+                        <div>
+                            <div class="stat-label">Bounce Risk</div>
+                            <div class="stat-value">3.2%</div>
+                        </div>
+                        <div class="stat-icon coral">⚠️</div>
+                    </div>
+                    <div style="font-size: 11px; color: var(--warning); font-weight: 600;">↓ 0.5% improved</div>
+                </div>
+            </div>
+
+            <!-- Extended Filter Bar -->
+            <div class="filter-bar">
+                <span class="filter-label">Filters</span>
+                <select class="input">
+                    <option>Job Titles</option>
+                    <option>CEO / Founder</option>
+                    <option>Software Engineer</option>
+                    <option>Marketing</option>
+                </select>
+                <select class="input">
+                    <option>Companies</option>
+                    <option>Google</option>
+                    <option>Microsoft</option>
+                </select>
+                <select class="input">
+                    <option>Locations</option>
+                    <option>San Francisco, CA</option>
+                    <option>London, UK</option>
+                    <option>New York, NY</option>
+                    <option>Remote</option>
+                </select>
+                <select class="input">
+                    <option>Industries</option>
+                    <option>Software Development</option>
+                    <option>Financial Services</option>
+                    <option>Healthcare</option>
+                </select>
+                <select class="input">
+                    <option>Company Size</option>
+                    <option>1-10</option>
+                    <option>11-50</option>
+                    <option>51-200</option>
+                    <option>201-1000</option>
+                    <option>1000+</option>
+                </select>
+                <select class="input">
+                    <option>Email Status</option>
+                    <option>Valid Only</option>
+                    <option>Catch-all</option>
+                    <option>Invalid</option>
+                </select>
+            </div>
+
+            <!-- Data Table with new fields -->
+            <div class="table-wrap">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th width="40"><input type="checkbox" class="cb"></th>
+                            <th width="180">Name / Job</th>
+                            <th width="150">Company</th>
+                            <th width="100">Location</th>
+                            <th width="140">Industry & Keywords</th>
+                            <th width="200">Email & Status</th>
+                            <th width="100">Socials</th>
+                            <th width="80">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><input type="checkbox" class="cb"></td>
+                            <td>
+                                <div class="cell-name">Alex Johnson</div>
+                                <div class="cell-sub">Senior Product Designer</div>
+                            </td>
+                            <td>
+                                <div class="cell-company">TechFlow Inc.</div>
+                                <div class="cell-domain">techflow.io • <span class="badge badge-neutral">51-200</span></div>
+                            </td>
+                            <td>
+                                <div style="font-size: 12px; color: var(--text-primary);">San Francisco, CA</div>
+                            </td>
+                            <td>
+                                <div style="font-size: 11px; color: var(--secondary);">Software</div>
+                                <div style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">#UI #UX #SaaS</div>
+                            </td>
+                            <td>
+                                <div class="email-wrap">
+                                    <div style="display: flex; gap: 8px; align-items: center;">
+                                        <span class="email-val">alex.j@techflow.io</span>
+                                        <span class="email-copy" title="Copy">📋</span>
+                                    </div>
+                                    <div><span class="badge badge-success">Verified</span></div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="social-icons">
+                                    <a href="#" class="social-icon li">in</a>
+                                    <a href="#" class="social-icon web">🔗</a>
+                                </div>
+                            </td>
+                            <td>
+                                <button class="action-btn">Delete</button>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><input type="checkbox" class="cb"></td>
+                            <td>
+                                <div class="cell-name">Sarah Williams</div>
+                                <div class="cell-sub">VP of Engineering</div>
+                            </td>
+                            <td>
+                                <div class="cell-company">CloudScale</div>
+                                <div class="cell-domain">cloudscale.net • <span class="badge badge-neutral">501-1k</span></div>
+                            </td>
+                            <td>
+                                <div style="font-size: 12px; color: var(--text-primary);">London, UK</div>
+                            </td>
+                            <td>
+                                <div style="font-size: 11px; color: var(--secondary);">Cloud Computing</div>
+                                <div style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">#AWS #DevOps</div>
+                            </td>
+                            <td>
+                                <div class="email-wrap">
+                                    <div style="display: flex; gap: 8px; align-items: center;">
+                                        <span class="email-val text-muted">s.williams@cloudscale.net</span>
+                                        <span class="email-copy" title="Copy">📋</span>
+                                    </div>
+                                    <div><span class="badge badge-danger">Catch-all</span></div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="social-icons">
+                                    <a href="#" class="social-icon li">in</a>
+                                    <a href="#" class="social-icon web">X</a>
+                                </div>
+                            </td>
+                            <td>
+                                <button class="action-btn">Delete</button>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><input type="checkbox" class="cb"></td>
+                            <td>
+                                <div class="cell-name">Michael Chen</div>
+                                <div class="cell-sub">Chief Executive Officer</div>
+                            </td>
+                            <td>
+                                <div class="cell-company">Nexus Ventures</div>
+                                <div class="cell-domain">nexus.vc • <span class="badge badge-neutral">11-50</span></div>
+                            </td>
+                            <td>
+                                <div style="font-size: 12px; color: var(--text-primary);">New York, NY</div>
+                            </td>
+                            <td>
+                                <div style="font-size: 11px; color: var(--secondary);">Venture Capital</div>
+                                <div style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">#B2B #Startups</div>
+                            </td>
+                            <td>
+                                <div class="email-wrap">
+                                    <div style="display: flex; gap: 8px; align-items: center;">
+                                        <span class="email-val text-gradient">mchen@nexus.vc</span>
+                                        <span class="email-copy" title="Copy">📋</span>
+                                    </div>
+                                    <div><span class="badge badge-primary">Valid (Direct)</span></div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="social-icons">
+                                    <a href="#" class="social-icon li">in</a>
+                                    <a href="#" class="social-icon web">🔗</a>
+                                </div>
+                            </td>
+                            <td>
+                                <button class="action-btn">Delete</button>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Pagination -->
+            <div class="pagination-bar">
+                <span>Showing 1-3 of 1,248</span>
+                <div class="pagination-btns">
+                    <button class="page-btn" disabled>Prev</button>
+                    <button class="page-btn active">1</button>
+                    <button class="page-btn">2</button>
+                    <button class="page-btn">3</button>
+                    <button class="page-btn">Next</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Sliding Sidebar Demo -->
+    <div id="demo-sidebar" class="open">
+        <div class="panel-header">
+            <div class="panel-logo">⚙️</div>
+            <div>
+                <div class="panel-title">Extension Settings</div>
+                <div class="panel-subtitle">Configure Apify & Scraper</div>
+            </div>
+            <div class="panel-header-right">
+                <button class="panel-icon-btn" onclick="document.getElementById('demo-sidebar').classList.remove('open')" title="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+        </div>
+        
+        <div class="panel-body">
+            <!-- Global Tabs inside Settings -->
+            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                <button class="btn btn-secondary" style="flex: 1; justify-content: center; border-color: var(--primary); color: var(--primary-light);">General</button>
+                <button class="btn btn-secondary" style="flex: 1; justify-content: center;">API Keys</button>
+                <button class="btn btn-secondary" style="flex: 1; justify-content: center;">Webhooks</button>
+            </div>
+
+            <!-- Autoscrape -->
+            <div class="autoscrape-card">
+                <div class="autoscrape-toggle-row">
+                    <label class="toggle">
+                        <input type="checkbox" checked>
+                        <span class="toggle-track"></span>
+                    </label>
+                    <div class="autoscrape-label">
+                        Auto-Scrape Engine <span class="badge badge-success">ON</span>
+                    </div>
+                </div>
+                
+                <div class="autoscrape-status">
+                    <div class="status-dot active"></div>
+                    Scraping Page 4 of "Software Engineers"
+                </div>
+
+                <div class="mode-radios">
+                    <label class="mode-radio-label">
+                        <input type="radio" name="mode" checked>
+                        <span><b>Aggressive Mode</b> (Fast, high usage)</span>
+                    </label>
+                    <label class="mode-radio-label">
+                        <input type="radio" name="mode">
+                        <span><b>Stealth Mode</b> (Slow, bypass limits)</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- API Keys Section -->
+            <div class="panel-card">
+                <div class="panel-card-title">Apify API Keys</div>
+                <div class="profile-list" style="margin-bottom: 12px; max-height: unset;">
+                    <div class="profile-item">
+                        <div class="profile-item-content">
+                            <div class="profile-item-name">Primary Account</div>
+                            <div class="profile-item-meta">apify_api_abc123...</div>
+                        </div>
+                        <div class="key-status active">Valid</div>
+                    </div>
+                    <div class="profile-item">
+                        <div class="profile-item-content">
+                            <div class="profile-item-name">Fallback Key</div>
+                            <div class="profile-item-meta">apify_api_xyz789...</div>
+                        </div>
+                        <div class="key-status expired">Empty</div>
+                    </div>
+                </div>
+                <button class="btn btn-secondary w-full" style="justify-content: center;">+ Add API Key</button>
+            </div>
+
+            <!-- Webhooks & Integrations Section -->
+            <div class="panel-card">
+                <div class="panel-card-title">Integrations (New)</div>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 12px; color: var(--text-primary);">HubSpot Sync</span>
+                        <label class="toggle" style="transform: scale(0.8);">
+                            <input type="checkbox">
+                            <span class="toggle-track"></span>
+                        </label>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 12px; color: var(--text-primary);">Salesforce Sync</span>
+                        <label class="toggle" style="transform: scale(0.8);">
+                            <input type="checkbox">
+                            <span class="toggle-track"></span>
+                        </label>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 12px; color: var(--text-primary);">Custom Webhook</span>
+                        <label class="toggle" style="transform: scale(0.8);">
+                            <input type="checkbox" checked>
+                            <span class="toggle-track"></span>
+                        </label>
+                    </div>
+                    <input type="text" class="input" placeholder="https://your-webhook.com/endpoint" value="https://make.com/hook/12345" style="margin-top: 4px; border-color: rgba(108,99,255,0.4);">
+                </div>
+            </div>
+
+            <!-- Recent Action -->
+            <div class="panel-card">
+                <div class="panel-card-title">Recent Activity</div>
+                <div class="profile-list">
+                    <div class="profile-item">
+                        <div class="profile-item-content">
+                            <div class="profile-item-name">Scraped Nexus Ventures</div>
+                            <div class="profile-item-meta">Added 4 new leads • 2m ago</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div style="padding: 16px; border-top: 1px solid var(--border);">
+            <button class="btn btn-primary w-full" style="justify-content: center;">Save Changes</button>
+        </div>
+
+        <!-- Floating toast -->
+        <div class="panel-toasts">
+            <div class="panel-toast success show">
+                <span>✅</span>
+                <div>Settings saved successfully</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

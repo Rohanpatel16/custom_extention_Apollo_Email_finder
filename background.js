@@ -1,3 +1,7 @@
+// Import IndexedDB wrapper so profile operations run on the extension origin.
+// Content scripts write to app.apollo.io's IndexedDB (wrong origin for dashboard),
+// so we proxy all profile CRUD through this service worker instead.
+importScripts('indexed-db.js');
 
 chrome.action.onClicked.addListener((tab) => {
     if (tab.id) {
@@ -13,6 +17,53 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "open_dashboard") {
         chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
         return;
+    }
+
+    // ─── Profile CRUD (proxied for content scripts) ────────────────────
+    // Content scripts run on app.apollo.io origin, so their IndexedDB is
+    // separate from the extension's. We proxy all profile operations here
+    // so everything writes to/reads from the extension-origin IndexedDB.
+
+    if (request.action === "SAVE_PROFILES") {
+        handleSaveProfiles(request.profiles)
+            .then(() => sendResponse({ success: true }))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+
+    if (request.action === "GET_ALL_PROFILES") {
+        handleGetAllProfiles()
+            .then(profiles => sendResponse({ success: true, profiles }))
+            .catch(err => sendResponse({ success: false, profiles: [], error: err.message }));
+        return true;
+    }
+
+    if (request.action === "GET_CACHED_PROFILE") {
+        handleGetCachedProfile(request.query)
+            .then(profile => sendResponse({ success: true, profile }))
+            .catch(err => sendResponse({ success: false, profile: null, error: err.message }));
+        return true;
+    }
+
+    if (request.action === "OVERWRITE_PROFILES") {
+        handleOverwriteProfiles(request.profiles)
+            .then(() => sendResponse({ success: true }))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+
+    if (request.action === "CLEAR_PROFILES") {
+        handleClearProfiles()
+            .then(() => sendResponse({ success: true }))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+
+    if (request.action === "COUNT_PROFILES") {
+        handleCountProfiles()
+            .then(count => sendResponse({ success: true, count }))
+            .catch(err => sendResponse({ success: false, count: 0, error: err.message }));
+        return true;
     }
 
     if (request.action === "CALL_APIFY") {
@@ -90,3 +141,100 @@ async function handleGetApifyLimits(apiKey) {
     }
     return res.json();
 }
+
+// ─── Profile CRUD handlers (extension-origin IndexedDB) ──────────────────
+
+/**
+ * Save/merge profiles into IndexedDB.
+ * Replicates the merge logic from storage.js so existing data is preserved.
+ */
+async function handleSaveProfiles(newProfiles) {
+    if (!newProfiles || newProfiles.length === 0) return;
+    await ProfileDB.open();
+
+    // Build a map of existing profiles that need merging
+    const existingMap = new Map();
+    for (const p of newProfiles) {
+        if (!p.id) continue;
+        const existing = await ProfileDB.getById(p.id);
+        if (existing) {
+            existingMap.set(p.id, existing);
+        }
+    }
+
+    // Merge logic (same as storage.js saveAllProfiles)
+    const toWrite = newProfiles.map(p => {
+        if (!p.id) return p;
+        const existing = existingMap.get(p.id);
+        let merged = existing ? { ...existing, ...p } : p;
+
+        // Auto-clear jobChanged once a valid email is verified
+        if (merged.jobChanged && merged.results && merged.results.some(r => r.result === 'ok')) {
+            merged = { ...merged, jobChanged: false };
+        }
+
+        return merged;
+    }).filter(p => p.id); // skip any without IDs
+
+    await ProfileDB.upsertMany(toWrite);
+    console.log(`[Background] Saved ${toWrite.length} profiles to extension-origin IndexedDB`);
+}
+
+/**
+ * Get all profiles from IndexedDB.
+ */
+async function handleGetAllProfiles() {
+    await ProfileDB.open();
+    return ProfileDB.getAll();
+}
+
+/**
+ * Find a profile by ID, LinkedIn URL, or Name+Domain.
+ * Replicates the indexed lookup logic from storage.js getCachedProfile.
+ */
+async function handleGetCachedProfile(query) {
+    if (!query) return null;
+    await ProfileDB.open();
+
+    if (query.id) {
+        const byId = await ProfileDB.getById(query.id);
+        if (byId) return byId;
+    }
+    if (query.linkedin_url) {
+        const byLi = await ProfileDB.getByLinkedin(query.linkedin_url);
+        if (byLi) return byLi;
+    }
+    if (query.name && query.domain) {
+        const byND = await ProfileDB.getByNameDomain(query.name, query.domain);
+        if (byND) return byND;
+    }
+    return null;
+}
+
+/**
+ * Overwrite all profiles (used by dashboard deletions).
+ */
+async function handleOverwriteProfiles(profiles) {
+    await ProfileDB.open();
+    await ProfileDB.deleteAll();
+    if (profiles && profiles.length > 0) {
+        await ProfileDB.upsertMany(profiles);
+    }
+}
+
+/**
+ * Clear all profiles.
+ */
+async function handleClearProfiles() {
+    await ProfileDB.open();
+    await ProfileDB.deleteAll();
+}
+
+/**
+ * Get profile count.
+ */
+async function handleCountProfiles() {
+    await ProfileDB.open();
+    return ProfileDB.count();
+}
+

@@ -13,19 +13,50 @@ window.ContentScraper = (() => {
 
         for (const [key, value] of params.entries()) {
             let isArray = key.endsWith('[]');
-            let cleanKey = isArray ? key.slice(0, -2) : key;
-            let snakeKey = cleanKey.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+            let objMatch = key.match(/^([^\[]+)\[([^\]]+)\]$/);
+            let isObject = !isArray && objMatch !== null;
+
+            let baseKey = key;
+            let subKey = null;
+
+            if (isArray) {
+                baseKey = key.slice(0, -2);
+            } else if (isObject) {
+                baseKey = objMatch[1];
+                subKey = objMatch[2];
+            }
+
+            let snakeKey = baseKey.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+
+            let parsedValue = value;
+            if (value === 'true') parsedValue = true;
+            else if (value === 'false') parsedValue = false;
 
             if (isArray) {
                 if (!filters[snakeKey]) filters[snakeKey] = [];
-                filters[snakeKey].push(value);
+                filters[snakeKey].push(parsedValue);
+            } else if (isObject) {
+                if (!filters[snakeKey]) filters[snakeKey] = {};
+                let snakeSubKey = subKey.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+                filters[snakeKey][snakeSubKey] = parsedValue;
             } else {
-                if (value === 'true') filters[snakeKey] = true;
-                else if (value === 'false') filters[snakeKey] = false;
-                else filters[snakeKey] = value;
+                filters[snakeKey] = parsedValue;
             }
         }
         if (filters.page !== undefined) delete filters.page;
+
+        // Ensure open_factor_names includes contact_job_changed if job changed filter is applied
+        if (filters.contact_job_changed !== undefined) {
+            if (!filters.open_factor_names) {
+                filters.open_factor_names = [];
+            }
+            if (!filters.open_factor_names.includes('contact_job_changed')) {
+                filters.open_factor_names.push('contact_job_changed');
+            }
+            // Apollo HAR showed this as a string, e.g., "true" or "false"
+            filters.contact_job_changed = String(filters.contact_job_changed);
+        }
+
         return filters;
     }
 
@@ -86,9 +117,12 @@ window.ContentScraper = (() => {
             }
 
             const finalPeopleList = data?.people || data?.contacts || [];
+            const totalCount = data?.pagination?.total_entries || data?.pagination?.total_count || 0;
+            const totalPages = data?.pagination?.total_pages || 0;
+
             if (finalPeopleList.length === 0) {
                 if (!silent) ContentUI.showToast("No profiles found on this page.", "error");
-                return 0;
+                return { profiles: [], totalCount, totalPages };
             }
 
             // ── Pass 1: load org snippets for all org IDs ──────────────────────
@@ -115,20 +149,14 @@ window.ContentScraper = (() => {
                     (orgData2.organizations || []).forEach(org => {
                         orgMap[org.id] = { ...(orgMap[org.id] || {}), ...org };
                     });
-                } catch (e) {}
+                } catch (e) {
+                    console.warn('[Extract] Supplemental org metadata query failed:', e);
+                }
             }
 
-            // Smart Dedup logic
-            const globalProfiles = await StorageWrapper.getAllProfiles();
-            const linkedinMap = new Map();
-            const nameDomainMap = new Map();
-            const nameMap = new Map();
-
-            globalProfiles.forEach(p => {
-                if (p.linkedin) linkedinMap.set(p.linkedin.toLowerCase(), p);
-                if (p.name && p.domain) nameDomainMap.set(`${p.name}|${p.domain}`.toLowerCase(), p);
-                if (p.name) nameMap.set(p.name.toLowerCase(), p);
-            });
+            // Smart Dedup logic — uses IndexedDB indexed lookups instead of
+            // loading the entire CRM into memory. Each lookup is O(1) via index.
+            await ProfileDB.open();
 
             const newProfiles = [];
             for (const person of finalPeopleList) {
@@ -155,26 +183,35 @@ window.ContentScraper = (() => {
                     continue;
                 }
 
-                // 3-Tier CRM Dedup
+                // 3-Tier CRM Dedup — indexed lookups instead of full array scan
                 // matchTier tracks HOW the match was found — only Tier 1 (LinkedIn) is
                 // authoritative enough to confirm same-person identity for job-change logic.
                 let existing = null;
                 let matchTier = 0;
 
-                if (profile.linkedin && linkedinMap.has(profile.linkedin.toLowerCase())) {
-                    // Tier 1: LinkedIn URL confirmed — same person
-                    existing = linkedinMap.get(profile.linkedin.toLowerCase());
-                    matchTier = 1;
-                } else if (profile.name && profile.domain && nameDomainMap.has(`${profile.name}|${profile.domain}`.toLowerCase())) {
-                    // Tier 2: Name + Domain match — same person at same company (metadata update only)
-                    existing = nameDomainMap.get(`${profile.name}|${profile.domain}`.toLowerCase());
-                    matchTier = 2;
-                } else if (profile.name && !profile.linkedin && nameMap.has(profile.name.toLowerCase())) {
-                    const candidate = nameMap.get(profile.name.toLowerCase());
-                    if (!candidate.linkedin) {
-                        // Tier 3: Name-only match — identity unconfirmed (could be a different person
-                        // with the same name). Do NOT merge; push as a fresh lead below.
-                        existing = candidate;
+                // Tier 1: LinkedIn URL — same person confirmed
+                if (profile.linkedin) {
+                    const byLi = await ProfileDB.getByLinkedin(profile.linkedin.toLowerCase());
+                    if (byLi) {
+                        existing = byLi;
+                        matchTier = 1;
+                    }
+                }
+
+                // Tier 2: Name + Domain — same person at same company
+                if (!existing && profile.name && profile.domain) {
+                    const byND = await ProfileDB.getByNameDomain(profile.name, profile.domain);
+                    if (byND) {
+                        existing = byND;
+                        matchTier = 2;
+                    }
+                }
+
+                // Tier 3: Name-only — identity unconfirmed fallback
+                if (!existing && profile.name && !profile.linkedin) {
+                    const byName = await ProfileDB.getByName(profile.name);
+                    if (byName && !byName.linkedin) {
+                        existing = byName;
                         matchTier = 3;
                     }
                 }
@@ -231,18 +268,21 @@ window.ContentScraper = (() => {
                 ContentUI.showToast(`⚠️ Skipped ${skippedAnomalyCount} anomalous result${skippedAnomalyCount > 1 ? 's' : ''} (outside employee filter)`, 'warning');
             }
 
-            return newProfiles;
+            return { profiles: newProfiles, totalCount, totalPages };
         } catch (err) {
             console.error('[Extract] failed:', err);
             if (!silent) ContentUI.showToast("Extraction failed: " + err.message, "error");
-            return 0;
+            return { profiles: [], totalCount: 0, totalPages: 0 };
         }
     }
 
     function getCurrentPageFromUrl() {
-        const hash = decodeURIComponent(window.location.hash);
-        const match = hash.match(/[?&]page=(\d+)/);
-        return match ? parseInt(match[1], 10) : 1;
+        const hash = window.location.hash;
+        if (!hash.includes('?')) return 1;
+        const qPart = hash.split('?')[1];
+        const params = new URLSearchParams(qPart);
+        const page = params.get('page');
+        return page ? parseInt(page, 10) : 1;
     }
 
     function getCurrentMinFromUrl() {
@@ -310,9 +350,21 @@ window.ContentScraper = (() => {
             document.querySelector('.zp-button:has(.apollo-icon-chevron-right)') ||
             Array.from(document.querySelectorAll('button')).find(b =>
                 b.textContent.includes('Next') || b.querySelector('.apollo-icon-chevron-right'));
+        
         if (nextBtn) {
-            nextBtn.click();
-            return true;
+            // Check for various disabled states
+            const isDisabled = 
+                nextBtn.disabled || 
+                nextBtn.getAttribute('aria-disabled') === 'true' || 
+                nextBtn.classList.contains('zp-is-disabled') ||
+                nextBtn.classList.contains('disabled');
+            
+            if (!isDisabled) {
+                nextBtn.click();
+                return true;
+            } else {
+                console.log('[ContentScraper] Next button found but is disabled.');
+            }
         }
         return false;
     }

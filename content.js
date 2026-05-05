@@ -39,9 +39,12 @@
         const selector = document.getElementById('av-key-selector');
         if (!selector) return;
         
-        selector.innerHTML = '';
+        selector.textContent = '';
         if (keys.length === 0) {
-            selector.innerHTML = '<option value="">No keys found</option>';
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'No keys found';
+            selector.appendChild(opt);
             updateKeyStatusUI(null);
             return;
         }
@@ -128,8 +131,12 @@
 
         document.getElementById('av-autoscrape-toggle').addEventListener('change', (e) => {
             state.autoScraping = e.target.checked;
-            if (state.autoScraping) runAutoScrape();
-            else ui.setAutoScrapeStatus('Stopping...');
+            if (state.autoScraping) {
+                runAutoScrape();
+            } else {
+                ui.setAutoScrapeStatus('Stopping...');
+                state.clearScrapeProgress();
+            }
         });
 
         // Auto-Scrape Mode radios — also toggle bracket settings visibility
@@ -184,13 +191,30 @@
             state.profiles.forEach(p => p.selected = e.target.checked);
             ui.renderList(state.profiles, document.getElementById('av-show-valid-only')?.checked);
         });
+
+        // Hash change listener: update UI when user navigates in Apollo
+        window.addEventListener('hashchange', () => {
+            const page = scraper.getCurrentPageFromUrl();
+            if (page > 1) {
+                // If auto-scraping is active, the loop updates its own status.
+                // We only update status text here if manual.
+                if (!state.autoScraping) updateStatusText(`On Page ${page}`);
+            } else if (!state.autoScraping && state.profiles.length === 0) {
+                updateStatusText('Ready to extract');
+            }
+        });
     }
 
     // -------------------------------------------------------------------------
     // 3. Handlers
     // -------------------------------------------------------------------------
     async function handleExtract(silent = false) {
-        const newProfiles = await scraper.extractProfiles(silent);
+        const result = await scraper.extractProfiles(silent);
+        const newProfiles = result?.profiles || [];
+        
+        // Update metadata for progress tracking
+        state.currentFilterTotal = result?.totalCount || 0;
+        
         if (Array.isArray(newProfiles) && newProfiles.length > 0) {
             // Check global cache for existing verified emails to save costs
             const globalProfiles = await StorageWrapper.getAllProfiles();
@@ -396,6 +420,65 @@
         return true;
     }
 
+    /**
+     * Helper to scrape a batch of up to 5 pages.
+     * Returns { newCount, exhausted }
+     */
+    async function scrapeBatch(contextName, maxPages = 5) {
+        const wait = ms => new Promise(r => setTimeout(r, ms));
+        let newInBatch = 0;
+        let exhausted = false;
+
+        for (let i = 0; i < maxPages; i++) {
+            if (!state.autoScraping) break;
+
+            const currentPage = scraper.getCurrentPageFromUrl();
+            let status = `${contextName} Page ${currentPage} (Batch: ${i + 1}/${maxPages})`;
+            
+            if (state.currentFilterTotal > 0) {
+                status = `${contextName} ${state.currentFilterScraped}/${state.currentFilterTotal} collected`;
+            }
+            ui.setAutoScrapeStatus(status);
+            await wait(state.SCRAPE_CONFIG.PAGE_LOAD_DELAY);
+
+            const result = await scraper.extractProfiles(true);
+            const extracted = result.profiles;
+            state.currentFilterTotal = result.totalCount;
+            
+            const newlyCollected = (extracted?.length || 0);
+            newInBatch += newlyCollected;
+            state.currentFilterScraped += newlyCollected;
+
+            if (newlyCollected > 0) {
+                state.addProfiles(extracted);
+                ui.renderList(state.profiles);
+
+                // Per-page verification if requested or if in bracket mode
+                if (state.autoScrapeMode === 'perpage' || state.autoScrapeMode === 'bracket') {
+                    ui.setAutoScrapeStatus(`${contextName} Verifying page ${currentPage}...`);
+                    const ok = await handleVerify(false);
+                    if (!ok) { state.autoScraping = false; break; }
+                }
+            }
+
+            // Predictive Exhaustion
+            if (state.currentFilterTotal > 0 && state.currentFilterScraped >= state.currentFilterTotal) {
+                console.log(`[scrapeBatch] ${contextName} exhausted: ${state.currentFilterScraped}/${state.currentFilterTotal}`);
+                exhausted = true;
+                break;
+            }
+
+            if (i < maxPages - 1) {
+                if (!(await scraper.clickNextPage())) {
+                    exhausted = true;
+                    break;
+                }
+                await wait(state.SCRAPE_CONFIG.NAV_WAIT_DELAY);
+            }
+        }
+        return { newInBatch, exhausted };
+    }
+
     async function runBracketScrape() {
         const wait = ms => new Promise(r => setTimeout(r, ms));
         const globalMin = state.bracketMin || 1;
@@ -415,46 +498,24 @@
 
             // Inner loop: scrape + optional deadlock within this bracket
             let bracketDone = false;
+            state.clearScrapeProgress();
+
             while (!bracketDone && state.autoScraping) {
-                let newInBracket = 0;
-
-                // Scrape up to 5 pages for this bracket — verify after each page
-                while (state.autoScraping) {
-                    const currentPage = scraper.getCurrentPageFromUrl();
-                    ui.setAutoScrapeStatus(`[Bracket ${lo}–${hi}] Page ${currentPage}/5`);
-                    await wait(state.SCRAPE_CONFIG.PAGE_LOAD_DELAY);
-
-                    const extracted = await scraper.extractProfiles(true);
-                    newInBracket += (extracted?.length || 0);
-                    if (Array.isArray(extracted) && extracted.length > 0) {
-                        state.addProfiles(extracted);
-                        ui.renderList(state.profiles);
-
-                        // Verify immediately after each page (Per-Page behaviour)
-                        ui.setAutoScrapeStatus(`[Bracket ${lo}–${hi}] Verifying page ${currentPage}...`);
-                        const ok = await handleVerify(false);
-                        if (!ok) { state.autoScraping = false; break; }
-                    }
-
-                    if (currentPage >= 5) break;
-                    if (!(await scraper.clickNextPage())) break;
-                    await wait(state.SCRAPE_CONFIG.NAV_WAIT_DELAY);
-                }
-
-                if (!state.autoScraping) break;
-
-                // Deadlock check: if this bracket still had domains, try to break out
-                if (newInBracket > 0 && state.sessionDomains.size > 0) {
+                const { newInBatch, exhausted } = await scrapeBatch(`[Bracket ${lo}–${hi}]`);
+                
+                if (exhausted) {
+                    bracketDone = true;
+                } else if (state.autoScraping && newInBatch > 0 && state.sessionDomains.size > 0) {
+                    // Deadlock check
                     const broke = await activateDeadlockBreaker();
                     if (!broke) {
-                        bracketDone = true; // deadlock unresolved — move to next bracket
+                        bracketDone = true;
                     } else {
-                        // Re-apply bracket filter (deadlock breaker rewrites the URL)
                         scraper.setBracketFilter(lo, hi);
                         await wait(state.SCRAPE_CONFIG.FILTER_WAIT_DELAY);
                     }
                 } else {
-                    bracketDone = true; // bracket exhausted — move on
+                    bracketDone = true;
                 }
             }
 
@@ -489,33 +550,11 @@
         const wait = ms => new Promise(r => setTimeout(r, ms));
 
         while (state.autoScraping) {
-            let newProfilesInBatch = 0;
             const batchStartIndex = state.profiles.length;
+            state.clearScrapeProgress();
 
-            while (state.autoScraping) {
-                const currentPage = scraper.getCurrentPageFromUrl();
-                ui.setAutoScrapeStatus(`[${mode}] Page ${currentPage}/5... (Min: ${scraper.getCurrentMinFromUrl()})`);
-                await wait(state.SCRAPE_CONFIG.PAGE_LOAD_DELAY);
-                
-                const extracted = await scraper.extractProfiles(true);
-                newProfilesInBatch += (extracted?.length || 0);
-                if (Array.isArray(extracted) && extracted.length > 0) {
-                    state.addProfiles(extracted);
-                    ui.renderList(state.profiles);
-                    
-                    if (mode === 'perpage') {
-                        ui.setAutoScrapeStatus(`[Per-Page] Verifying page ${currentPage}...`);
-                        const ok = await handleVerify(false);
-                        if (!ok) { state.autoScraping = false; break; }
-                    }
-                }
-
-                if (currentPage >= 5) break;
-                ui.setAutoScrapeStatus(`[${mode}] Next page...`);
-                if (!(await scraper.clickNextPage())) break;
-                await wait(state.SCRAPE_CONFIG.NAV_WAIT_DELAY);
-            }
-
+            const { newInBatch } = await scrapeBatch(`[${mode}]`);
+            
             if (!state.autoScraping) break;
 
             if (mode === 'batch') {
@@ -524,7 +563,7 @@
                 if (!ok) { state.autoScraping = false; break; }
             }
 
-            if (newProfilesInBatch === 0) {
+            if (newInBatch === 0) {
                 // All results were deduplicated — likely resuming a previous session.
                 // Advance the filter by 1 past the current minimum instead of stopping.
                 const currentMinResume = scraper.getCurrentMinFromUrl();

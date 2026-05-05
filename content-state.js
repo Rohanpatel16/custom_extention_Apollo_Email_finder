@@ -13,6 +13,8 @@ window.ContentState = (() => {
         bracketMin: 1,
         bracketMax: 50,
         bracketStep: 2,
+        currentFilterTotal: 0,
+        currentFilterScraped: 0,
         sessionDomains: new Set(),
         allExcludedDomains: new Set(),
         activeKey: null,
@@ -27,6 +29,11 @@ window.ContentState = (() => {
         
         resetBatch() {
             this.autoScrapePageCount = 0;
+        },
+        
+        clearScrapeProgress() {
+            this.currentFilterTotal = 0;
+            this.currentFilterScraped = 0;
         },
         
         addProfiles(newProfiles) {

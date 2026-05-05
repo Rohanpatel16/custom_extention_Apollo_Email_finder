@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Mock Apollo</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        .zp-button { padding: 10px; cursor: pointer; background: #eee; border: 1px solid #ccc; }
+    </style>
+</head>
+<body>
+    <h1>Apollo Search Results (Mock)</h1>
+    <div id="apollo-app">
+        <p>This is a mock page to test the extension injection and scraper logic.</p>
+        <button class="zp-button" aria-label="Next">Next Page</button>
+    </div>
+    
+    <script>
+        // Simulate hash change for filters
+        window.location.hash = "#search?page=1&organizationNumEmployeesRanges[]=1,10";
+    </script>
+</body>
+</html>

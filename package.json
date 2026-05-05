@@ -1,0 +1,11 @@
+{
+  "name": "apollo-email-verifier-tests",
+  "version": "1.0.0",
+  "description": "E2E tests for Apollo Email Verifier",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.42.0"
+  }
+}
